@@ -1,30 +1,25 @@
-import { useState } from 'react';
-import { ZONES_TO_WIN, ZONE_LIST } from '../data/zones';
+import { useMemo, useState } from 'react';
+import { ZONE_LIST } from '../data/zones';
+import { endTurn, perform, type GameAction, type GameState, type RacketId, type TerritoryId } from '../engine';
 import {
-  BALANCE,
-  endTurn,
-  forecast,
-  ownedTerritories,
-  perform,
-  policeAttention,
-  totalInfluence,
-  weekLabel,
-  type GameAction,
-  type GameState,
-  type TerritoryId,
-} from '../engine';
-import { money, signedMoney } from './format';
+  Drawer,
+  PlayerHud,
+  ProfileModal,
+  RacketBanner,
+  RacketRail,
+  RivalChips,
+  RoundButton,
+  TurnRibbon,
+  ZoneBanner,
+} from './hud';
 import { MapView } from './MapView';
 import { EndScreen, WeeklyReport } from './Newspaper';
-import { NewsPanel, OrganizationPanel, RivalsPanel, ZonePanel } from './panels';
+import { NewsPanel, RivalsPanel, ZonePanel } from './panels';
+import { RacketsPanel } from './RacketsPanel';
 
-type Tab = 'zona' | 'organizzazione' | 'rivali' | 'notizie';
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'zona', label: 'Zona' },
-  { id: 'organizzazione', label: 'Organizzazione' },
-  { id: 'rivali', label: 'Rivali' },
-  { id: 'notizie', label: 'Notizie' },
-];
+/** Cosa occupa il cartiglio in alto: un quartiere o un ramo d'affari. */
+type Focus = { kind: 'zone'; id: TerritoryId } | { kind: 'racket'; id: RacketId } | null;
+type DrawerId = 'zona' | 'affari' | 'rivali' | 'notizie' | null;
 
 interface Props {
   game: GameState;
@@ -33,9 +28,10 @@ interface Props {
 }
 
 export function GameScreen({ game, setGame, onQuit }: Props) {
-  const me = game.families[game.playerId];
-  const [selected, setSelected] = useState<TerritoryId | null>(me.home);
-  const [tab, setTab] = useState<Tab>('zona');
+  const [focus, setFocus] = useState<Focus>(null);
+  const [rail, setRail] = useState(false);
+  const [drawer, setDrawer] = useState<DrawerId>(null);
+  const [profile, setProfile] = useState(false);
   const [showReport, setShowReport] = useState(false);
 
   const act = (action: GameAction) => {
@@ -43,106 +39,90 @@ export function GameScreen({ game, setGame, onQuit }: Props) {
     if (result.ok) setGame(state);
   };
   const selectZone = (id: TerritoryId) => {
-    setSelected(id);
-    setTab('zona');
+    setFocus({ kind: 'zone', id });
+    setProfile(false);
+    // Il fascicolo del quartiere resta aperto e si aggiorna; gli altri si chiudono per mostrare la mappa.
+    if (drawer !== 'zona') setDrawer(null);
+  };
+  const clearFocus = () => {
+    setFocus(null);
+    if (drawer === 'zona') setDrawer(null);
   };
   const endWeek = () => {
     setGame(endTurn(game));
     setShowReport(true);
   };
+  const quit = () => {
+    if (window.confirm('Abbandonare la partita? I progressi andranno persi.')) onQuit();
+  };
+  const toggleDrawer = (d: Exclude<DrawerId, null>) => setDrawer(drawer === d ? null : d);
 
-  const fc = forecast(game, me.id);
-  const owned = ownedTerritories(game, me.id).length;
-  const attention = policeAttention(game, me.id);
+  const selected = focus?.kind === 'zone' ? focus.id : null;
+  const racket = focus?.kind === 'racket' ? focus.id : null;
+  const highlight = useMemo(
+    () => new Set<TerritoryId>(racket ? ZONE_LIST.filter((z) => z.rackets.includes(racket)).map((z) => z.id) : []),
+    [racket],
+  );
 
   return (
     <div className="game">
-      <header className="topbar">
-        <span className="brand">Roma <span>criminale</span></span>
-        <span className="week">
-          <strong>Settimana {game.week}</strong>
-          <small>{weekLabel(game.week)}</small>
-        </span>
-        <span className="pips" aria-label={`${game.actionsLeft} azioni rimaste su ${BALANCE.actionsPerTurn}`}>
-          {Array.from({ length: BALANCE.actionsPerTurn }, (_, i) => (
-            <i key={i} className={`pip${i < game.actionsLeft ? ' on' : ''}`} />
-          ))}
-          <small className="empty">azioni</small>
-        </span>
-        {game.week <= BALANCE.truceWeeks && (
-          <small className="empty truce">Tregua: nessuno attacca fino alla settimana {BALANCE.truceWeeks + 1}</small>
-        )}
-        <span className="spacer" />
-        <button className="btn btn-small" onClick={onQuit}>Abbandona</button>
-        <button className="btn btn-primary" onClick={endWeek} disabled={game.status !== 'playing'}>
-          Fine settimana →
-        </button>
-      </header>
+      <MapView game={game} selected={selected} highlight={highlight} onSelect={selectZone} onBackground={clearFocus} />
 
-      <div className="stats" role="list">
-        <div className="stat" role="listitem">
-          <span className="eyebrow">Denaro</span>
-          <span className="value">{money(me.money)}</span>
-          <span className={`sub ${fc.net >= 0 ? 'pos' : 'neg'}`}>{signedMoney(fc.net)}/sett.</span>
-        </div>
-        <div className="stat" role="listitem">
-          <span className="eyebrow">Influenza</span>
-          <span className="value">{totalInfluence(game, me.id)}</span>
-          <span className="sub">reputazione {Math.round(me.reputation)}</span>
-        </div>
-        <div className="stat" role="listitem">
-          <span className="eyebrow">Territori</span>
-          <span className="value">{owned}/{ZONE_LIST.length}</span>
-          <span className="sub">obiettivo {ZONES_TO_WIN}</span>
-        </div>
-        <div className="stat" role="listitem">
-          <span className="eyebrow">Membri</span>
-          <span className="value">{me.members}</span>
-          <span className="sub">−{money(fc.upkeep)}/sett.</span>
-        </div>
-        <div className="stat" role="listitem">
-          <span className="eyebrow">Rischio</span>
-          <span className="value">{Math.round(me.heat)}%</span>
-          <div className={`meter${me.heat >= 60 ? ' hot' : ''}`}><span style={{ width: `${me.heat}%` }} /></div>
-        </div>
-        <div className="stat" role="listitem">
-          <span className="eyebrow">Attenzione</span>
-          <span className="value">{attention}%</span>
-          <div className={`meter${attention >= 60 ? ' hot' : ''}`}><span style={{ width: `${attention}%` }} /></div>
-        </div>
-      </div>
+      {focus?.kind === 'zone' ? (
+        <ZoneBanner game={game} zoneId={focus.id} act={act} onClose={clearFocus} onDetails={() => toggleDrawer('zona')} />
+      ) : focus?.kind === 'racket' ? (
+        <RacketBanner key={focus.id} game={game} racketId={focus.id} act={act} onClose={clearFocus} onSelectZone={selectZone} />
+      ) : (
+        <TurnRibbon game={game} onEndTurn={endWeek} />
+      )}
 
-      <div className="board">
-        <div className="map-wrap">
-          <MapView game={game} selected={selected} onSelect={selectZone} />
-          <div className="map-legend">
-            {game.familyOrder.map((id) => {
-              const f = game.families[id];
-              return (
-                <span key={id} style={{ opacity: f.alive ? 1 : 0.4 }}>
-                  <i style={{ background: f.color }} />
-                  {f.name}{f.isPlayer ? ' (tu)' : ''}
-                </span>
-              );
-            })}
-          </div>
-        </div>
+      <button className="corner-btn left" onClick={quit}>Esci</button>
+      <button className="corner-btn right" onClick={() => toggleDrawer('notizie')} aria-pressed={drawer === 'notizie'}>Notizie</button>
 
-        <aside className="dossier">
-          <div className="tabs" role="tablist">
-            {TABS.map((t) => (
-              <button key={t.id} id={`tab-${t.id}`} role="tab" className="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}>
-                {t.label}
-              </button>
-            ))}
-          </div>
-          {tab === 'zona' && <ZonePanel game={game} zoneId={selected} act={act} />}
-          {tab === 'organizzazione' && <OrganizationPanel game={game} act={act} onSelectZone={selectZone} />}
-          {tab === 'rivali' && <RivalsPanel game={game} act={act} onSelectZone={selectZone} />}
-          {tab === 'notizie' && <NewsPanel game={game} />}
-        </aside>
-      </div>
+      {rail ? (
+        <RacketRail
+          game={game}
+          selected={racket}
+          onSelect={(id) => setFocus({ kind: 'racket', id })}
+          onSummary={() => toggleDrawer('affari')}
+          onClose={() => {
+            setRail(false);
+            if (racket) setFocus(null);
+          }}
+        />
+      ) : (
+        <nav className="round-menu" aria-label="Menu">
+          <RoundButton label="Affari" primary onClick={() => { setRail(true); setDrawer(null); }} />
+          <RoundButton label="Banda" onClick={() => setProfile(true)} />
+          <RoundButton label="Rivali" onClick={() => toggleDrawer('rivali')} pressed={drawer === 'rivali'} />
+        </nav>
+      )}
 
+      <RivalChips game={game} onOpen={() => toggleDrawer('rivali')} />
+      <PlayerHud game={game} onProfile={() => setProfile(true)} />
+
+      {drawer === 'zona' && selected && (
+        <Drawer title="Quartiere" side="right" onClose={() => setDrawer(null)}>
+          <ZonePanel game={game} zoneId={selected} act={act} onSelectZone={selectZone} />
+        </Drawer>
+      )}
+      {drawer === 'affari' && (
+        <Drawer title="Affari" side="left" onClose={() => setDrawer(null)}>
+          <RacketsPanel game={game} act={act} onSelectZone={selectZone} />
+        </Drawer>
+      )}
+      {drawer === 'rivali' && (
+        <Drawer title="Rivali" side="left" onClose={() => setDrawer(null)}>
+          <RivalsPanel game={game} act={act} onSelectZone={selectZone} />
+        </Drawer>
+      )}
+      {drawer === 'notizie' && (
+        <Drawer title="Notizie" side="right" onClose={() => setDrawer(null)}>
+          <NewsPanel game={game} />
+        </Drawer>
+      )}
+
+      {profile && <ProfileModal game={game} act={act} onClose={() => setProfile(false)} onSelectZone={selectZone} />}
       {showReport && game.lastReport && game.status === 'playing' && (
         <WeeklyReport report={game.lastReport} onClose={() => setShowReport(false)} />
       )}

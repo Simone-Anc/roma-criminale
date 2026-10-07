@@ -1,14 +1,17 @@
-// Regole sul controllo delle zone (influenza a somma 100).
+// Regole sul controllo dei quartieri (influenza a somma 100).
 import { ZONES } from '../data/zones';
 import { BALANCE } from './balance';
 import { mid, news, v } from './news';
+import { areaDefense } from './organization';
+import { bonuses } from './rackets';
 import type { Rng } from './rng';
 import { LOCALS, type FamilyId, type GameState, type TerritoryId } from './types';
 
 /**
  * Sposta `amount` punti di influenza verso `familyId`. Prima assorbe i gruppi
  * locali, poi erode l'organizzazione più forte: contro un'organizzazione ogni
- * punto costa il doppio, perché chi difende è avvantaggiato.
+ * punto costa il doppio, perché chi difende è avvantaggiato (e ancora di più se
+ * ha il vantaggio "difesa").
  */
 export function shiftInfluence(
   state: GameState,
@@ -25,9 +28,10 @@ export function shiftInfluence(
       .sort((a, b) => (a[0] === LOCALS ? -1 : b[0] === LOCALS ? 1 : b[1] - a[1]));
     if (holders.length === 0) break;
     const [id, val] = holders[0];
-    const rate = id === LOCALS ? 1 : 0.5;
+    const defense = id === LOCALS ? 0 : bonuses(state, id).defense + areaDefense(state, id, territoryId);
+    const rate = id === LOCALS ? 1 : 0.5 / (1 + defense / 100);
     const take = Math.min(val, Math.max(1, Math.round(remaining * rate)));
-    remaining -= id === LOCALS ? take : take * 2;
+    remaining -= take / rate;
     inf[id] = val - take;
     if (inf[id] === 0 && id !== LOCALS) delete inf[id];
     inf[familyId] = (inf[familyId] ?? 0) + take;
@@ -53,7 +57,6 @@ export function updateOwner(state: GameState, territoryId: TerritoryId, rng: Rng
 
   const oldOwner = t.owner;
   t.owner = newOwner;
-  t.activities = [];
 
   if (newOwner) {
     const f = state.families[newOwner];
@@ -62,17 +65,17 @@ export function updateOwner(state: GameState, territoryId: TerritoryId, rng: Rng
       const old = state.families[oldOwner];
       old.reputation = Math.max(0, old.reputation - 4);
       news(state, 'territorio', rng.pick([
-        `Roma ${zone.name}, cambia la mappa del potere: ${f.name} ${v(f, 'scalza', 'scalzano')} ${mid(old)}`,
-        `Zona ${zone.name}, passaggio di mano: ora ${v(f, 'comanda', 'comandano')} ${mid(f)}`,
-      ]), newOwner, 'Gli equilibri della zona sono cambiati. Gli investigatori seguono la vicenda.');
+        `${zone.name}, cambia la mappa del potere: ${f.name} ${v(f, 'scalza', 'scalzano')} ${mid(old)}`,
+        `${zone.name}, passaggio di mano: ora ${v(f, 'comanda', 'comandano')} ${mid(f)}`,
+      ]), newOwner, 'Gli equilibri del quartiere sono cambiati. Gli investigatori seguono la vicenda.');
     } else {
       news(state, 'territorio', rng.pick([
-        `Zona ${zone.name}: ${f.name} ${v(f, 'diventa', 'diventano')} la presenza dominante`,
-        `${zone.name}, nuovi padroni: ${f.name} ${v(f, 'allunga', 'allungano')} le mani sulla zona`,
+        `${zone.name}: ${f.name} ${v(f, 'diventa', 'diventano')} la presenza dominante`,
+        `${zone.name}, nuovi padroni: ${f.name} ${v(f, 'allunga', 'allungano')} le mani sul quartiere`,
       ]), newOwner);
     }
   } else if (oldOwner) {
     const old = state.families[oldOwner];
-    news(state, 'territorio', `Zona ${zone.name} senza padrone: ${old.name} ${v(old, 'perde', 'perdono')} la presa`, oldOwner);
+    news(state, 'territorio', `${zone.name} senza padrone: ${old.name} ${v(old, 'perde', 'perdono')} la presa`, oldOwner);
   }
 }

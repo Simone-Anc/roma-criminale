@@ -2,6 +2,8 @@ import { RIVAL_DEFS } from '../data/organizations';
 import { ZONE_LIST } from '../data/zones';
 import { BALANCE } from './balance';
 import { news } from './news';
+import { generateLieutenant } from './organization';
+import { Rng } from './rng';
 import { LOCALS, type Family, type FamilyDef, type FamilyId, type GameState, type TerritoryState } from './types';
 
 export function newGame(player: FamilyDef, seed = Date.now()): GameState {
@@ -16,7 +18,9 @@ export function newGame(player: FamilyDef, seed = Date.now()): GameState {
       money: def.startMoney,
       members: def.startMembers,
       reputation: isPlayer ? BALANCE.playerStartReputation : BALANCE.startReputation,
+      rackets: { ...def.startRackets, [def.specialization]: BALANCE.specializationStartLevel },
       heat: isPlayer ? 5 : 15,
+      lieutenants: [],
       relations,
       isPlayer,
       alive: true,
@@ -25,24 +29,14 @@ export function newGame(player: FamilyDef, seed = Date.now()): GameState {
   }
 
   const territories: Record<string, TerritoryState> = {};
-  for (const z of ZONE_LIST) {
-    const homeOf = defs.find((f) => f.home === z.id);
-    territories[z.id] = homeOf
-      ? {
-          id: z.id,
-          influence: { [homeOf.id]: homeOf.startInfluence, [LOCALS]: 100 - homeOf.startInfluence },
-          owner: homeOf.id,
-          activities: [],
-        }
-      : { id: z.id, influence: { [LOCALS]: 100 }, owner: null, activities: [] };
-  }
-
-  // Le rivali partono con la loro specialità già avviata; il giocatore sceglie da sé.
-  for (const def of RIVAL_DEFS) {
-    const zone = ZONE_LIST.find((z) => z.id === def.home)!;
-    territories[zone.id].activities.push(
-      zone.activities.includes(def.specialization) ? def.specialization : zone.activities[0],
-    );
+  for (const z of ZONE_LIST) territories[z.id] = { id: z.id, influence: { [LOCALS]: 100 }, owner: null };
+  // Base dell'organizzazione e quartieri già sotto il suo controllo.
+  for (const def of defs) {
+    const zones = [def.home, ...def.startZones];
+    zones.forEach((zid, i) => {
+      const value = i === 0 ? def.startInfluence : def.startInfluence - BALANCE.startZoneGap;
+      territories[zid] = { id: zid, influence: { [def.id]: value, [LOCALS]: 100 - value }, owner: def.id };
+    });
   }
 
   const state: GameState = {
@@ -59,9 +53,21 @@ export function newGame(player: FamilyDef, seed = Date.now()): GameState {
     status: 'playing',
     endReason: null,
     pendingSetup: 0,
+    candidates: [],
+    nextId: 1,
   };
 
+  // Il braccio destro: già fedele, responsabile dell'area di casa, con due soldati.
+  const rng = new Rng(state.rngState);
+  const right = generateLieutenant(state, rng);
+  right.loyalty = 72;
+  right.soldiers = 2;
+  right.assignment = { type: 'area', area: ZONE_LIST.find((z) => z.id === player.home)!.area };
+  families[player.id].lieutenants.push(right);
+  state.candidates = Array.from({ length: BALANCE.candidateCount }, () => generateLieutenant(state, rng));
+  state.rngState = rng.state;
+
   news(state, 'organizzazione', `Roma, prima settimana: ${player.name} ${player.plural ? 'muovono' : 'muove'} i primi passi`, player.id,
-    'Pochi soldi, pochi uomini, una sola zona. Le grandi organizzazioni non si sono ancora accorte di voi.');
+    'Pochi soldi, pochi uomini, un solo quartiere. Le grandi organizzazioni non si sono ancora accorte di voi.');
   return state;
 }

@@ -66,7 +66,7 @@ export function WeeklyReport({ report, onClose }: { report: TurnReport; onClose:
                 <div className="ledger">
                   {Object.entries(report.controlDelta).map(([zid, d]) => (
                     <span key={zid} style={{ display: 'contents' }}>
-                      <span>Zona {ZONES[zid].name}</span>
+                      <span>{ZONES[zid].name}</span>
                       <span className={d < 0 ? 'neg' : ''}>{signed(d)}%</span>
                     </span>
                   ))}
@@ -120,7 +120,7 @@ export function EndScreen({ game, onRestart }: { game: GameState; onRestart: () 
               <span key={f.id} style={{ display: 'contents' }}>
                 <span>
                   {f.name}
-                  {f.isPlayer ? ' (tu)' : ''} · {ownedTerritories(game, f.id).length} zone
+                  {f.isPlayer ? ' (tu)' : ''} · {ownedTerritories(game, f.id).length} quartieri
                 </span>
                 <span>{f.alive ? power(game, f.id) : '—'}</span>
               </span>

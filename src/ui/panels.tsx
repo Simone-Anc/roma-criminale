@@ -1,22 +1,19 @@
-import { ACTIVITIES } from '../data/activities';
-import { ZONES } from '../data/zones';
+import { RACKETS } from '../data/rackets';
+import { AREAS, ZONES, ZONE_LIST } from '../data/zones';
 import {
   BALANCE,
   LOCALS,
-  activeActivityCount,
-  activityHeat,
-  activitySlots,
-  activityYield,
   actionCost,
+  areaChief,
+  di,
+  fullName,
   control,
   controlLevel,
   expandGain,
-  forecast,
-  heatLabel,
   ownedTerritories,
+  racketNetwork,
   power,
   relationLabel,
-  totalInfluence,
   tribute,
   validateAction,
   zoneRisk,
@@ -27,9 +24,9 @@ import {
 } from '../engine';
 import { money, signed, wealthLabel } from './format';
 
-type Act = (a: GameAction) => void;
+export type Act = (a: GameAction) => void;
 
-function ActionButton({ game, action, label, act, primary }: {
+export function ActionButton({ game, action, label, act, primary }: {
   game: GameState; action: GameAction; label: string; act: Act; primary?: boolean;
 }) {
   const check = validateAction(game, game.playerId, action);
@@ -40,7 +37,7 @@ function ActionButton({ game, action, label, act, primary }: {
       title={check.reason}
       onClick={() => act(action)}
     >
-      {label} <span className="cost">{money(actionCost(action))}</span>
+      {label} <span className="cost">{money(actionCost(game, game.playerId, action))}</span>
     </button>
   );
 }
@@ -58,11 +55,13 @@ function level10(n: number): string {
 }
 
 // ------------------------------------------------------------------ Zona
-export function ZonePanel({ game, zoneId, act }: { game: GameState; zoneId: TerritoryId | null; act: Act }) {
+export function ZonePanel({ game, zoneId, act, onSelectZone }: {
+  game: GameState; zoneId: TerritoryId | null; act: Act; onSelectZone: (id: TerritoryId) => void;
+}) {
   if (!zoneId)
     return (
       <div className="panel">
-        <p className="empty">Seleziona una zona sulla mappa. Il bordo tratteggiato indica dove puoi estendere la tua influenza.</p>
+        <p className="empty">Seleziona un quartiere sulla mappa. Il bordo tratteggiato indica dove puoi estendere la tua influenza.</p>
       </div>
     );
 
@@ -71,6 +70,7 @@ export function ZonePanel({ game, zoneId, act }: { game: GameState; zoneId: Terr
   const owner = t.owner ? game.families[t.owner] : null;
   const me = game.families[game.playerId];
   const mine = t.owner === me.id;
+  const chief = areaChief(game, me.id, zoneId);
   const myCtrl = control(game, zoneId, me.id);
   const influence = Object.entries(t.influence).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
   const colorOf = (id: string) => (id === LOCALS ? 'var(--land-hi)' : game.families[id].color);
@@ -79,23 +79,30 @@ export function ZonePanel({ game, zoneId, act }: { game: GameState; zoneId: Terr
   const expand: GameAction = { type: 'expand', territoryId: zoneId };
   const consolidate: GameAction = { type: 'consolidate', territoryId: zoneId };
   const reason = reasonFor(game, mine ? consolidate : expand);
+  const areaZones = ZONE_LIST.filter((z) => z.area === zone.area);
+  const areaMine = areaZones.filter((z) => game.territories[z.id].owner === me.id).length;
 
   return (
     <div className="panel">
       <div className="panel-head">
-        <span className="eyebrow">Zona</span>
+        <span className="eyebrow">Quartiere · {AREAS[zone.area]} · {zone.population}k abitanti</span>
         <h2>{zone.name}</h2>
         <span className="empty">{zone.flavor}</span>
         <span className="owner">
           {owner ? (
             <>
               <i className="dot" style={{ background: owner.color }} />
-              {owner.isPlayer ? 'Dominata da te' : `Dominata da ${owner.name}`}
+              {owner.isPlayer ? 'Dominato da te' : `Dominato da ${owner.name}`}
             </>
           ) : (
-            'Nessuna organizzazione domina la zona'
+            'Nessuna organizzazione domina il quartiere'
           )}
         </span>
+        {chief && (
+          <span className="empty">
+            Responsabile dell'area: {fullName(chief)}, {chief.nickname} · {chief.soldiers} soldati
+          </span>
+        )}
       </div>
 
       <div className="attr-grid">
@@ -105,7 +112,7 @@ export function ZonePanel({ game, zoneId, act }: { game: GameState; zoneId: Terr
       </div>
 
       <section>
-        <h3>Influenza nella zona</h3>
+        <h3>Influenza nel quartiere</h3>
         <div className="influence-bar" aria-hidden="true">
           {influence.map(([id, v]) => <span key={id} style={{ width: `${v}%`, background: colorOf(id) }} />)}
         </div>
@@ -120,133 +127,64 @@ export function ZonePanel({ game, zoneId, act }: { game: GameState; zoneId: Terr
           ))}
         </ul>
         <p className="hint">
-          Domina la zona l'organizzazione con più influenza, se arriva almeno al {BALANCE.ownershipThreshold}%.
+          Domina il quartiere l'organizzazione con più influenza, se arriva almeno al {BALANCE.ownershipThreshold}%.
         </p>
       </section>
 
       <section>
         <h3>Azioni</h3>
         <div className="actions">
-          <ActionButton game={game} action={expand} label={`Aumenta influenza +${expandGain(me)}`} act={act} primary={!mine} />
-          {mine && <ActionButton game={game} action={consolidate} label={`Rafforza zona +${BALANCE.consolidateGain}`} act={act} />}
+          {mine ? (
+            <ActionButton game={game} action={consolidate} label={`Rafforza quartiere +${BALANCE.consolidateGain}`} act={act} primary />
+          ) : (
+            <ActionButton game={game} action={expand} label={`Aumenta influenza +${expandGain(game, me.id)}`} act={act} primary />
+          )}
         </div>
-        {reason && <p className="hint">{reason}</p>}
-        {!mine && owner && <p className="hint">Sottrarre influenza a un'organizzazione costa il doppio e peggiora i rapporti con lei.</p>}
-      </section>
-
-      <section>
-        <h3>Attività</h3>
         <p className="hint">
           {mine
-            ? `Membri impegnati: ${activeActivityCount(game, me.id) * BALANCE.membersPerActivity} su ${me.members} · tributo della zona ${money(tribute(game, me.id, zoneId))}/sett.`
-            : 'Solo l’organizzazione dominante gestisce le attività della zona.'}
+            ? `Il quartiere è tuo: rafforzarlo costa poco, non attira attenzione e rende più difficile portartelo via.`
+            : owner
+              ? `Entri nel quartiere: prima togli influenza ai gruppi locali, poi intacchi la presa ${di(owner)}. Chi difende è avvantaggiato (rende la metà) e se la lega al dito. +${BALANCE.expandHeat} rischio.`
+              : `Entri nel quartiere togliendo influenza ai gruppi locali. Lo domini dal ${BALANCE.ownershipThreshold}%. +${BALANCE.expandHeat} rischio.`}
         </p>
-        <ul className="activity-list">
-          {zone.activities.map((aid) => {
-            const a = ACTIVITIES[aid];
-            const on = t.activities.includes(aid);
-            const action: GameAction = { type: 'toggleActivity', territoryId: zoneId, activityId: aid };
-            const check = validateAction(game, me.id, action);
+        {reason && <p className="hint warn">{reason}</p>}
+      </section>
+
+      <section>
+        <h3>Area {AREAS[zone.area]}</h3>
+        <p className="hint">
+          {areaZones.length} quartieri · ne domini {areaMine}
+          {chief ? ` · responsabile ${fullName(chief)}` : ' · nessun tuo vice capo è responsabile dell’area'}
+        </p>
+        <div className="rows">
+          {areaZones.map((z) => {
+            const o = game.territories[z.id].owner;
+            const f = o ? game.families[o] : null;
             return (
-              <li key={aid} className={`activity${on && mine ? ' on' : ''}`}>
-                <span className="name">
-                  {a.name}
-                  {me.specialization === aid && <span className="spec-tag">specialità</span>}
-                </span>
-                {mine && (
-                  <button className={`btn btn-small${on ? '' : ' btn-primary'}`} disabled={!check.ok} title={check.reason} onClick={() => act(action)}>
-                    {on ? 'Chiudi' : <>Avvia <span className="cost">{money(a.cost)}</span></>}
-                  </button>
-                )}
-                <span className="meta">
-                  {mine && <span>profitto {money(activityYield(game, me.id, zoneId, aid))}/sett.</span>}
-                  <span>rischio {signed(activityHeat(zoneId, aid))}</span>
-                  {a.influence > 0 && <span>influenza +{a.influence}/sett.</span>}
-                  <span>controllo min. {a.minControl}%</span>
-                </span>
-                <p className="desc">{a.description}</p>
-                {mine && !on && !check.ok && <p className="desc warn">{check.reason}</p>}
-                {!mine && on && owner && <p className="desc">Gestita da {owner.name}.</p>}
-              </li>
+              <div className={`row${z.id === zoneId ? ' current' : ''}`} key={z.id}>
+                <i className="dot" style={{ background: f ? f.color : 'var(--land-hi)' }} />
+                <button className="link" onClick={() => onSelectZone(z.id)}>{z.name}</button>
+                <span className="empty">{f ? (f.isPlayer ? 'tuo' : f.name) : 'libero'}</span>
+                <span className="num">{f ? `${Math.round(control(game, z.id, f.id))}%` : ''}</span>
+              </div>
             );
           })}
-        </ul>
-      </section>
-    </div>
-  );
-}
-
-// ------------------------------------------------------------------ Organizzazione
-export function OrganizationPanel({ game, act, onSelectZone }: { game: GameState; act: Act; onSelectZone: (id: TerritoryId) => void }) {
-  const me = game.families[game.playerId];
-  const owned = ownedTerritories(game, me.id);
-  const fc = forecast(game, me.id);
-  const tributes = owned.reduce((s, t) => s + tribute(game, me.id, t.id), 0);
-  const assigned = activeActivityCount(game, me.id) * BALANCE.membersPerActivity;
-
-  return (
-    <div className="panel">
-      <div className="panel-head">
-        <span className="eyebrow">La tua organizzazione</span>
-        <h2>{me.name}</h2>
-      </div>
-
-      <div className="attr-grid four">
-        <div className="attr"><span className="label">Potere</span><span className="value">{power(game, me.id)}</span></div>
-        <div className="attr"><span className="label">Denaro</span><span className="value">{money(me.money)}</span></div>
-        <div className="attr"><span className="label">Influenza</span><span className="value">{totalInfluence(game, me.id)}</span></div>
-        <div className="attr"><span className="label">Reputazione</span><span className="value">{Math.round(me.reputation)}</span></div>
-      </div>
-
-      <section>
-        <h3>Struttura</h3>
-        <ul className="tree">
-          <li><strong>Capo</strong> <span className="empty">· tu</span></li>
-          {owned.map((t) => (
-            <li key={t.id} className="branch">
-              Responsabile zona {ZONES[t.id].name} <span className="empty">· da nominare</span>
-            </li>
-          ))}
-          <li className="branch">
-            Membri <span className="num">{me.members}</span>{' '}
-            <span className="empty">· {assigned} sulle attività, {me.members - assigned} liberi</span>
-          </li>
-        </ul>
-        <p className="hint">Personaggi con nome, ruoli e lealtà arriveranno con la versione 0.6.</p>
-      </section>
-
-      <section>
-        <h3>Gestione</h3>
-        <div className="actions">
-          <ActionButton game={game} action={{ type: 'recruit' }} label={`Recluta ${BALANCE.recruitAmount} membri`} act={act} />
-          <ActionButton game={game} action={{ type: 'lowProfile' }} label={`Basso profilo −${BALANCE.lowProfileHeat} rischio`} act={act} />
         </div>
+      </section>
+
+      <section>
+        <h3>Affari possibili qui</h3>
         <p className="hint">
-          Ogni membro costa {money(BALANCE.memberUpkeep)} a settimana; ogni attività ne impegna {BALANCE.membersPerActivity}.
-          Rischio attuale: {heatLabel(me.heat).toLowerCase()}. Puoi gestire {activitySlots(me)} attività.
+          {mine
+            ? `Il quartiere sostiene questi rami d'affari: allarga la loro rete. Tributo del quartiere ${money(tribute(game, me.id, zoneId))}/sett.`
+            : 'Se domini il quartiere, questi rami d’affari possono crescere grazie a lui.'}
         </p>
-      </section>
-
-      <section>
-        <h3>Bilancio previsto</h3>
-        <div className="rows">
-          <div className="row">Tributi dalle zone<span className="num">{money(tributes)}</span></div>
-          <div className="row">Attività<span className="num">{money(fc.income - tributes)}</span></div>
-          <div className="row">Mantenimento membri<span className="num">−{money(fc.upkeep)}</span></div>
-          <div className="row"><strong>Saldo settimanale</strong><span className={`num ${fc.net < 0 ? 'neg' : ''}`}>{fc.net >= 0 ? '+' : ''}{money(fc.net)}</span></div>
-          <div className="row">Rischio<span className="num">{signed(fc.heat)}/sett.</span></div>
-        </div>
-      </section>
-
-      <section>
-        <h3>Zone</h3>
-        <div className="rows">
-          {owned.map((t) => (
-            <div className="row" key={t.id}>
-              <button className="link" onClick={() => onSelectZone(t.id)}>{ZONES[t.id].name}</button>
-              <span className="empty">{controlLevel(control(game, t.id, me.id))} · {t.activities.length} attività</span>
-              <span className="num">{Math.round(control(game, t.id, me.id))}%</span>
-            </div>
+        <div className="chips">
+          {zone.rackets.map((rid) => (
+            <span key={rid} className={`chip${me.specialization === rid ? ' spec' : ''}`}>
+              {RACKETS[rid].name}
+              {mine && <span className="empty"> · rete {racketNetwork(game, me.id, rid).length}</span>}
+            </span>
           ))}
         </div>
       </section>
@@ -267,14 +205,14 @@ export function RivalsPanel({ game, act, onSelectZone }: { game: GameState; act:
       <div className="panel-head">
         <span className="eyebrow">Organizzazioni rivali</span>
         <p className="hint" style={{ margin: 0 }}>
-          Il tuo potere: <span className="num">{power(game, me.id)}</span>. Con rapporti tesi gli attacchi alle tue zone diventano più probabili.
+          Il tuo potere: <span className="num">{power(game, me.id)}</span>. Con rapporti tesi gli attacchi ai tuoi quartieri diventano più probabili.
         </p>
       </div>
 
       <div className="table-wrap">
         <table className="rivals">
           <thead>
-            <tr><th>Organizzazione</th><th className="r">Potere</th><th>Denaro</th><th className="r">Zone</th><th>Relazione</th></tr>
+            <tr><th>Organizzazione</th><th className="r">Potere</th><th>Denaro</th><th className="r">Quartieri</th><th>Relazione</th></tr>
           </thead>
           <tbody>
             {rivals.map((f) => (
@@ -302,7 +240,7 @@ export function RivalsPanel({ game, act, onSelectZone }: { game: GameState; act:
             </div>
             <p>{f.trait}</p>
             <p>
-              Zone:{' '}
+              Quartieri:{' '}
               {owned.length === 0 ? 'nessuna' : owned.map((t, i) => (
                 <span key={t.id}>
                   {i > 0 && ', '}
@@ -330,7 +268,7 @@ export function RivalsPanel({ game, act, onSelectZone }: { game: GameState; act:
 
 // ------------------------------------------------------------------ Notizie
 const KIND_LABEL: Record<NewsItem['kind'], string> = {
-  territorio: 'Zone',
+  territorio: 'Quartieri',
   economia: 'Economia',
   diplomazia: 'Rapporti',
   polizia: 'Cronaca giudiziaria',

@@ -1,12 +1,14 @@
 // "Fine settimana": economia, IA, territori, pressione, fine partita.
 // Ogni passo è una funzione separata, così i sistemi futuri (Eventi, Polizia,
 // Diplomazia, Guerra) si inseriscono come nuovi passi senza toccare gli altri.
-import { ACTIVITIES } from '../data/activities';
 import { ZONES_TO_WIN, ZONE_LIST } from '../data/zones';
 import { runAi } from './ai';
 import { BALANCE } from './balance';
 import { mid, news, v } from './news';
-import { control, forecast, ownedTerritories, power, totalInfluence } from './queries';
+import { actionsPerTurn, control, forecast, ownedTerritories, power, totalInfluence } from './queries';
+import { organizationStep, shakeLoyalty } from './loyalty';
+import { areaPresidio, fitSquads } from './organization';
+import { bonuses } from './rackets';
 import { Rng } from './rng';
 import { shiftInfluence, updateOwner } from './territory';
 import type { Family, GameState, NewsItem, TerritoryId, TurnReport } from './types';
@@ -19,17 +21,20 @@ export function endTurn(prev: GameState): GameState {
   const player = state.families[state.playerId];
   const heatBefore = player.heat;
   const controlBefore = snapshotControl(state);
+  const ownedBefore = new Set(ownedTerritories(state, player.id).map((t) => t.id));
 
   // 1. Economia
   const { income, upkeep } = economyStep(state);
   // 2. Le organizzazioni IA agiscono
   aiStep(state, rng);
-  // 3. Le attività radicano l'influenza nelle zone
+  // 3. I vantaggi dei rami radicano l'influenza nei quartieri
   territoryStep(state, rng);
   // 4. Eventi (versione 0.5) — 5. Pressione delle forze dell'ordine (prima bozza)
   for (const f of alive(state)) pressureStep(state, f, rng);
   // 6. Statistiche, relazioni, organizzazioni eliminate
   upkeepStep(state);
+  // 7. Gerarchia: lealtà dei vice capi, scissioni, nuovi candidati
+  organizationStep(state, ownedBefore, rng);
 
   const controlAfter = snapshotControl(state);
   const controlDelta: Record<TerritoryId, number> = {};
@@ -49,10 +54,10 @@ export function endTurn(prev: GameState): GameState {
     news: newsSince(state.news, marker),
   };
 
-  // 7. Fine turno
+  // 8. Fine turno
   checkEnd(state);
   state.week += 1;
-  state.actionsLeft = BALANCE.actionsPerTurn;
+  state.actionsLeft = actionsPerTurn(state, state.playerId);
   state.pendingSetup = 0;
   state.lastReport = report;
   state.rngState = rng.state;
@@ -66,6 +71,7 @@ function economyStep(state: GameState): { income: number; upkeep: number } {
     const fc = forecast(state, f.id);
     f.money = round1(f.money + fc.net);
     f.heat = round1(Math.min(100, Math.max(0, f.heat + fc.heat)));
+    f.reputation = Math.min(100, f.reputation + bonuses(state, f.id).reputationPerWeek);
     if (f.isPlayer) ({ income, upkeep } = fc);
   }
   return { income, upkeep };
@@ -81,27 +87,31 @@ function aiStep(state: GameState, rng: Rng): void {
 }
 
 function territoryStep(state: GameState, rng: Rng): void {
+  // I bonus si calcolano prima: i passaggi di mano della settimana non devono influire.
+  const gains = Object.fromEntries(alive(state).map((f) => [f.id, bonuses(state, f.id).influencePerWeek]));
   for (const z of ZONE_LIST) {
     const t = state.territories[z.id];
-    if (!t.owner) continue;
-    const gain = t.activities.reduce((s, a) => s + ACTIVITIES[a].influence, 0);
+    const gain = t.owner ? gains[t.owner] + areaPresidio(state, t.owner, z.id) : 0;
     if (gain > 0) {
-      shiftInfluence(state, z.id, t.owner, gain);
+      shiftInfluence(state, z.id, t.owner!, gain);
       updateOwner(state, z.id, rng);
     }
   }
 }
 
 function pressureStep(state: GameState, f: Family, rng: Rng): void {
-  if (f.heat >= 60 && rng.chance((f.heat - 55) / 120)) {
+  const shield = 1 - Math.min(90, bonuses(state, f.id).policeShield) / 100;
+  if (f.heat >= 60 && rng.chance(((f.heat - 55) / 120) * shield)) {
     const seized = Math.max(10, Math.round(Math.max(0, f.money) * 0.12));
     f.money -= seized;
     news(state, 'polizia', `Sequestro di beni: nel mirino ${mid(f)}`, f.id,
       f.isPlayer ? `Bloccati circa ${seized}k €. Ridurre il rischio abbassa la probabilità di nuovi sequestri.` : undefined);
   }
-  if (f.heat >= 85 && rng.chance(0.25)) {
+  if (f.heat >= 85 && rng.chance(0.25 * shield)) {
     f.members = Math.max(1, f.members - 2);
     f.reputation = Math.max(0, f.reputation - 5);
+    fitSquads(f);
+    shakeLoyalty(f, BALANCE.arrestLoyaltyHit);
     news(state, 'polizia', `${f.name}, operazione all'alba: scattano gli arresti`, f.id,
       f.isPlayer ? 'Due membri dell’organizzazione sono stati fermati.' : undefined);
   }
@@ -112,6 +122,7 @@ function upkeepStep(state: GameState): void {
     if (f.money < 0) {
       f.brokeWeeks += 1;
       f.members = Math.max(1, f.members - 1);
+      fitSquads(f);
       if (f.isPlayer)
         news(state, 'economia', 'Casse vuote: un membro lascia l’organizzazione', f.id,
           `Settimane consecutive in rosso: ${f.brokeWeeks} su ${BALANCE.brokeWeeksToLose}.`);
@@ -133,11 +144,11 @@ function checkEnd(state: GameState): void {
   const player = state.families[state.playerId];
   const owned = ownedTerritories(state, player.id).length;
 
-  if (owned === 0) return end(state, 'lost', 'Hai perso tutte le zone: l’organizzazione si è dissolta.');
+  if (owned === 0) return end(state, 'lost', 'Hai perso tutti i quartieri: l’organizzazione si è dissolta.');
   if (player.brokeWeeks >= BALANCE.brokeWeeksToLose)
     return end(state, 'lost', 'Senza risorse: l’organizzazione è collassata.');
   if (owned >= ZONES_TO_WIN)
-    return end(state, 'won', `Dominio territoriale: controlli ${owned} zone su ${ZONE_LIST.length}.`);
+    return end(state, 'won', `Dominio territoriale: controlli ${owned} quartieri su ${ZONE_LIST.length}.`);
   if (player.money >= BALANCE.winMoney)
     return end(state, 'won', `Dominio economico: oltre ${BALANCE.winMoney / 1000} milione di euro in cassa.`);
   if (alive(state).every((f) => f.isPlayer))

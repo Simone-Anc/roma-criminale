@@ -1,8 +1,10 @@
 // Funzioni di sola lettura sullo stato: usate da UI, IA e motore.
-import { ACTIVITIES } from '../data/activities';
+import { RACKET_LIST } from '../data/rackets';
 import { ZONES as TERRITORIES, ZONE_LIST as TERRITORY_LIST } from '../data/zones';
 import { BALANCE, CONTROL_LEVELS } from './balance';
-import type { ActivityId, Family, FamilyId, GameState, TerritoryId, TerritoryState } from './types';
+import { areaTributeBonus, organizationHeat, skimmed } from './organization';
+import { bonuses, racketHeat, racketIncome } from './rackets';
+import type { FamilyId, GameState, TerritoryId, TerritoryState } from './types';
 
 export function ownedTerritories(state: GameState, familyId: FamilyId): TerritoryState[] {
   return Object.values(state.territories).filter((t) => t.owner === familyId);
@@ -12,58 +14,47 @@ export function control(state: GameState, territoryId: TerritoryId, familyId: Fa
   return state.territories[territoryId].influence[familyId] ?? 0;
 }
 
-export function activeActivityCount(state: GameState, familyId: FamilyId): number {
-  return ownedTerritories(state, familyId).reduce((n, t) => n + t.activities.length, 0);
-}
-
-export function activitySlots(family: Family): number {
-  return Math.floor(family.members / BALANCE.membersPerActivity);
-}
-
 /** Un territorio è raggiungibile se confina con uno controllato o se vi si ha già influenza. */
 export function canReach(state: GameState, familyId: FamilyId, territoryId: TerritoryId): boolean {
   if (control(state, territoryId, familyId) > 0) return true;
   return TERRITORIES[territoryId].neighbors.some((n) => state.territories[n].owner === familyId);
 }
 
-export function expandCost(territoryId: TerritoryId): number {
+export function expandCost(state: GameState, familyId: FamilyId, territoryId: TerritoryId): number {
   const def = TERRITORIES[territoryId];
-  return BALANCE.expandBaseCost + def.wealth * BALANCE.expandWealthCost + def.lawPresence;
+  const base = BALANCE.expandBaseCost + def.wealth * BALANCE.expandWealthCost + def.lawPresence;
+  return Math.round(base * (1 - bonuses(state, familyId).expandDiscount / 100));
 }
 
-export function expandGain(family: Family): number {
-  return Math.round(10 + family.members / 3 + family.reputation / 20);
+export function expandGain(state: GameState, familyId: FamilyId): number {
+  const f = state.families[familyId];
+  return Math.round(10 + f.members / 3 + f.reputation / 20) + bonuses(state, familyId).expandGain;
 }
 
-/** Rendimento settimanale di un'attività in un territorio per una famiglia. */
-export function activityYield(
-  state: GameState,
-  familyId: FamilyId,
-  territoryId: TerritoryId,
-  activityId: ActivityId,
-): number {
-  const def = TERRITORIES[territoryId];
-  const act = ACTIVITIES[activityId];
-  const family = state.families[familyId];
-  const ctrl = control(state, territoryId, familyId) / 100;
-  const spec = family.specialization === activityId ? 1.3 : 1;
-  return act.income * (0.5 + def.wealth / 10) * (0.3 + ctrl) * spec;
+export function recruitCost(state: GameState, familyId: FamilyId): number {
+  const discount = Math.min(75, bonuses(state, familyId).recruitDiscount);
+  return Math.round(BALANCE.recruitCost * (1 - discount / 100));
 }
 
-export function activityHeat(territoryId: TerritoryId, activityId: ActivityId): number {
-  const act = ACTIVITIES[activityId];
-  if (act.heat < 0) return act.heat;
-  return act.heat * (TERRITORIES[territoryId].lawPresence / 6);
+export function actionsPerTurn(state: GameState, familyId: FamilyId): number {
+  return BALANCE.actionsPerTurn + bonuses(state, familyId).actions;
 }
 
 export function tribute(state: GameState, familyId: FamilyId, territoryId: TerritoryId): number {
   const def = TERRITORIES[territoryId];
-  return (def.wealth * control(state, territoryId, familyId) * BALANCE.tributeFactor) / 100;
+  const extra = 1 + bonuses(state, familyId).tribute / 100 + areaTributeBonus(state, familyId, territoryId);
+  return (def.wealth * control(state, territoryId, familyId) * BALANCE.tributeFactor * extra) / 100;
 }
 
 export interface Forecast {
+  /** Entrate totali: tributi + rami d'affari. */
   income: number;
+  tributes: number;
+  rackets: number;
+  /** Stipendi: soldati e vice capi. */
   upkeep: number;
+  /** Trattenuto dai vice poco leali. */
+  skimmed: number;
   net: number;
   heat: number;
 }
@@ -71,17 +62,18 @@ export interface Forecast {
 /** Previsione delle entrate/uscite della prossima chiusura di settimana. */
 export function forecast(state: GameState, familyId: FamilyId): Forecast {
   const family = state.families[familyId];
-  let income = 0;
-  let heat = -BALANCE.heatDecay;
-  for (const t of ownedTerritories(state, familyId)) {
-    income += tribute(state, familyId, t.id);
-    for (const a of t.activities) {
-      income += activityYield(state, familyId, t.id, a);
-      heat += activityHeat(t.id, a);
-    }
+  const all = bonuses(state, familyId);
+  const tributes = ownedTerritories(state, familyId).reduce((s, t) => s + tribute(state, familyId, t.id), 0);
+  let rackets = 0;
+  let heat = -BALANCE.heatDecay + Math.max(0, family.money) / BALANCE.cashPerHeat + organizationHeat(family);
+  for (const r of RACKET_LIST) {
+    rackets += racketIncome(state, familyId, r.id, all);
+    heat += racketHeat(state, familyId, r.id);
   }
-  const upkeep = family.members * BALANCE.memberUpkeep;
-  return { income, upkeep, net: income - upkeep, heat };
+  const income = tributes + rackets;
+  const upkeep = family.members * BALANCE.memberUpkeep + family.lieutenants.length * BALANCE.lieutenantUpkeep;
+  const lost = skimmed(family);
+  return { income, tributes, rackets, upkeep, skimmed: lost, net: income - upkeep - lost, heat };
 }
 
 /** Influenza complessiva: media del controllo su tutte le zone (0-100). */
@@ -95,11 +87,11 @@ export function controlLevel(value: number): string {
   return CONTROL_LEVELS.find((l) => value >= l.min)!.label;
 }
 
-/** Rischio di una zona (0-100): presenza della polizia più la pressione delle attività in corso. */
+/** Rischio di un quartiere (0-100): presenza della polizia più l'esposizione di chi lo domina. */
 export function zoneRisk(state: GameState, territoryId: TerritoryId): number {
-  const t = state.territories[territoryId];
-  const fromActivities = t.activities.reduce((s, a) => s + Math.max(0, activityHeat(territoryId, a)), 0);
-  return Math.min(100, Math.round(TERRITORIES[territoryId].lawPresence * 6 + fromActivities * 4));
+  const owner = state.territories[territoryId].owner;
+  const ownerHeat = owner ? state.families[owner].heat : 0;
+  return Math.min(100, Math.round(TERRITORIES[territoryId].lawPresence * 6 + ownerHeat / 4));
 }
 
 /** Attenzione delle forze dell'ordine: esposizione pesata dalla loro presenza nei tuoi territori. */
@@ -108,7 +100,7 @@ export function policeAttention(state: GameState, familyId: FamilyId): number {
   const owned = ownedTerritories(state, familyId);
   if (owned.length === 0) return Math.round(family.heat / 2);
   const avgLaw = owned.reduce((s, t) => s + TERRITORIES[t.id].lawPresence, 0) / owned.length;
-  return Math.min(100, Math.round(family.heat * (avgLaw / 8) + owned.length * 2));
+  return Math.min(100, Math.round(family.heat * (avgLaw / 8) + owned.length));
 }
 
 /** Potenza sintetica, usata per confronti e classifica. */
@@ -116,7 +108,7 @@ export function power(state: GameState, familyId: FamilyId): number {
   const f = state.families[familyId];
   if (!f.alive) return 0;
   return Math.round(
-    totalInfluence(state, familyId) * 3 + f.members * 2 + f.money / 20 + f.reputation,
+    totalInfluence(state, familyId) * 3 + f.members * 2 + f.lieutenants.length * 4 + f.money / 20 + f.reputation,
   );
 }
 

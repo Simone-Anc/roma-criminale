@@ -1,3 +1,6 @@
 node_modules/
 dist/
 dist-single/
+
+# Riferimenti grafici locali (screenshot di altri giochi): non versionati
+example/

@@ -2,7 +2,7 @@
 import { ZONES } from '../data/zones';
 import { BALANCE } from './balance';
 import { mid, news, v } from './news';
-import { areaDefense } from './organization';
+import { spaccioDefense } from './organization';
 import { bonuses } from './rackets';
 import type { Rng } from './rng';
 import { LOCALS, type FamilyId, type GameState, type TerritoryId } from './types';
@@ -28,7 +28,7 @@ export function shiftInfluence(
       .sort((a, b) => (a[0] === LOCALS ? -1 : b[0] === LOCALS ? 1 : b[1] - a[1]));
     if (holders.length === 0) break;
     const [id, val] = holders[0];
-    const defense = id === LOCALS ? 0 : bonuses(state, id).defense + areaDefense(state, id, territoryId);
+    const defense = id === LOCALS ? 0 : bonuses(state, id).defense + spaccioDefense(state, id, territoryId);
     const rate = id === LOCALS ? 1 : 0.5 / (1 + defense / 100);
     const take = Math.min(val, Math.max(1, Math.round(remaining * rate)));
     remaining -= take / rate;

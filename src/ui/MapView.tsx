@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type MouseEvent } from 'react';
 import { AREAS, ZONES, ZONE_LIST } from '../data/zones';
-import { control, validateAction, type AreaId, type GameState, type TerritoryId } from '../engine';
+import { canReach, control, validateAction, type AreaId, type GameState, type TerritoryId } from '../engine';
 import {
   ANIENE_PATH,
   AREA_BORDER_PATH,
@@ -23,6 +23,18 @@ interface Props {
   onSelect: (id: TerritoryId) => void;
   /** Clic fuori dai quartieri: chiude la selezione. */
   onBackground: () => void;
+  /** Vice capi disegnati dentro il quartiere dove lavorano (spaccio). */
+  markers?: MapMarker[];
+}
+
+export interface MapMarker {
+  zoneId: TerritoryId;
+  /** Iniziali del personaggio. */
+  text: string;
+  /** Colore del bordo: lealtà del vice. */
+  tone: string;
+  /** Fermo (quartiere perso) o solo in anteprima. */
+  dim?: boolean;
 }
 
 /** Controllo: colori delle organizzazioni. Aree: colori delle macro-aree. */
@@ -45,11 +57,12 @@ function nameLines(name: string, fontSize: number): string[] {
   return [name.slice(0, space), name.slice(space + 1)];
 }
 
-export function MapView({ game, selected, highlight, onSelect, onBackground }: Props) {
+export function MapView({ game, selected, highlight, onSelect, onBackground, markers = [] }: Props) {
+  // Tratteggiati i quartieri confinanti: l'influenza si può aumentare ovunque, ma lì costa meno.
   const reachable = useMemo(() => {
     const set = new Set<string>();
     for (const z of ZONE_LIST) {
-      if (game.territories[z.id].owner === game.playerId) continue;
+      if (game.territories[z.id].owner === game.playerId || !canReach(game, game.playerId, z.id)) continue;
       if (validateAction(game, game.playerId, { type: 'expand', territoryId: z.id }).ok) set.add(z.id);
     }
     return set;
@@ -232,6 +245,49 @@ export function MapView({ game, selected, highlight, onSelect, onBackground }: P
                     {line}
                   </text>
                 ))}
+            </g>
+          );
+        })}
+        {/* Guerre in corso: contorno rosso che scorre, spade, uomini in campo e fronte. */}
+        {game.battles.map((b) => (
+          <path key={`o${b.id}`} className="zone-battle" d={ZONE_SHAPES[b.territoryId].path} />
+        ))}
+        {game.battles.map((b) => {
+          const shape = ZONE_SHAPES[b.territoryId];
+          const a = game.families[b.attacker];
+          const d = game.families[b.defender];
+          const u = 1 / px; // un pixel sullo schermo
+          const w = 64 * u;
+          const h = 22 * u;
+          const x = shape.label.x - w / 2;
+          const y = shape.label.y + 10 * u;
+          const bar = 4 * u;
+          const split = (w - 8 * u) * (1 - b.front / 100);
+          return (
+            <g key={`b${b.id}`} className="map-battle" transform={`translate(${x} ${y})`}>
+              <rect className="map-battle-bg" width={w} height={h + bar + 4 * u} rx={4 * u} />
+              <text className="map-battle-num" x={10 * u} y={h / 2 + 1 * u} style={{ fontSize: 12 * u, fill: d.color }}>{b.defenders}</text>
+              <g transform={`translate(${w / 2 - 7 * u} ${h / 2 - 7 * u}) scale(${(14 * u) / 24})`}>
+                <path className="map-battle-swords" d="M4 4l11 11M20 4L9 15M13 17l4 4M11 17l-4 4M15 13l4 0M9 13l-4 0" />
+              </g>
+              <text className="map-battle-num" x={w - 10 * u} y={h / 2 + 1 * u} style={{ fontSize: 12 * u, fill: a.color }}>{b.attackers}</text>
+              <rect x={4 * u} y={h} width={split} height={bar} style={{ fill: d.color }} />
+              <rect x={4 * u + split} y={h} width={w - 8 * u - split} height={bar} style={{ fill: a.color }} />
+            </g>
+          );
+        })}
+
+        {/* Vice allo spaccio: un medaglione dentro il quartiere, accanto al valore. */}
+        {markers.map((m, i) => {
+          const shape = ZONE_SHAPES[m.zoneId];
+          const R = Math.min(15 / px, shape.fontSize * 1.5);
+          const r = Math.min(9 / px, shape.fontSize * 0.95);
+          const x = shape.label.x + r + R * 0.9;
+          const y = shape.label.y - R * 0.6;
+          return (
+            <g key={`${m.zoneId}${i}`} className={`map-marker${m.dim ? ' dim' : ''}`}>
+              <circle cx={x} cy={y} r={R} style={{ stroke: m.tone }} />
+              <text x={x} y={y} style={{ fontSize: R * 0.85 }}>{m.text}</text>
             </g>
           );
         })}

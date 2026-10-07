@@ -263,6 +263,17 @@ h1, h2, h3 {
   box-shadow: 0 0 0 5px rgb(255 255 255 / 0.12);
 }
 .corner-btn.left { left: calc(16px + var(--safe-l)); }
+/* In alto a sinistra: Esci e il tracciato della polizia. */
+.top-left {
+  position: absolute;
+  top: calc(14px * var(--s));
+  left: calc(16px + var(--safe-l));
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  z-index: 2;
+}
+.top-left .corner-btn { position: static; }
 .corner-btn.right { right: calc(16px + var(--safe-r)); }
 .corner-btn:hover, .corner-btn[aria-pressed='true'] { border-color: var(--brass); color: #fff; }
 
@@ -473,11 +484,9 @@ h1, h2, h3 {
 }
 .influence-strip span { display: block; height: 100%; opacity: 0.92; }
 .influence-strip .threshold { position: absolute; top: -4px; bottom: -4px; border-left: 2px dashed #111; }
-.level-strip { display: flex; gap: calc(4px * var(--s) + 1px); height: calc(24px * var(--s) + 4px); }
-.level-strip i { flex: 1; background: #ececeb; border: 1px solid #d2d2d2; }
-.level-strip i.open { background: #cfd4da; }
-.level-strip i.idle { background: #e6a69e; }
-.level-strip i.on { background: var(--brass); border-color: #a07a3c; }
+.slot-bar.big { height: calc(24px * var(--s) + 4px); gap: calc(4px * var(--s) + 1px); }
+.slot-bar.big i.free { background: #ececeb; border: 1px dashed #b9b9b9; }
+.slot-bar.big i.mine { box-shadow: inset 0 0 0 2px #fff4d8, 0 0 0 1px #6b5023; }
 
 /* X tonda */
 .round-close {
@@ -628,7 +637,19 @@ h1, h2, h3 {
 .rival-box strong { font-size: calc(24px * var(--s) + 2px); font-weight: 500; }
 .rival-box small { font-size: calc(10px * var(--s) + 2px); text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.9; }
 .rival-chip .crest { position: relative; }
-.rival-chip.out { opacity: 0.4; }
+.rival-more {
+  align-self: center;
+  width: calc(52px * var(--s) + 8px);
+  height: calc(52px * var(--s) + 8px);
+  border-radius: 50%;
+  padding: 0;
+  background: radial-gradient(circle at 50% 40%, #fff, #e6e6e6);
+  border: calc(4px * var(--s)) solid #d3d3d2;
+  box-shadow: 0 0 0 1px #8d8d8f, 0 3px 8px rgb(0 0 0 / 0.4);
+  color: #232427;
+  font-family: var(--font-hud);
+  font-size: calc(20px * var(--s) + 2px);
+}
 
 /* Il capo in basso a destra */
 .hud-player {
@@ -745,35 +766,59 @@ h1, h2, h3 {
 .drawer-body { overflow-y: auto; min-height: 0; }
 .drawer-body .panel { overflow: visible; }
 
-/* Profilo: ritratto del capo e banda */
+/* Profilo: ritratto piccolo e valori grandi in alto, sotto la banda */
 .profile-overlay { z-index: 8; padding: 28px; }
 .profile {
   position: relative;
-  width: min(1120px, 100%);
-  height: min(760px, 100dvh - 56px);
+  width: min(1080px, 100%);
+  height: min(800px, 100dvh - 56px);
   display: grid;
-  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  grid-template-rows: auto minmax(0, 1fr);
   background: var(--panel);
   box-shadow: 0 30px 80px rgb(0 0 0 / 0.6);
   -webkit-user-select: text;
   user-select: text;
 }
-.profile-art { position: relative; overflow: hidden; background: #1a1410; }
-.profile-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 40% 30%; }
-.profile-caption {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 70px 20px 18px;
-  background: linear-gradient(transparent, rgb(12 9 7 / 0.94) 42%);
+.profile-head {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px 22px;
+  padding: 18px 24px;
+  background: linear-gradient(#25262b, var(--panel));
+  border-bottom: 1px solid var(--line);
 }
-.profile-caption h2 { font-size: clamp(26px, 3.4vw, 38px); line-height: 1.05; }
-.profile-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 12px 0 0; }
-.profile-stats dt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
-.profile-stats dd { margin: 0; font-family: var(--font-data); font-size: 18px; }
+.profile-face {
+  width: 104px;
+  height: 104px;
+  object-fit: cover;
+  object-position: 50% 22%;
+  border-radius: 10px;
+  border: 3px solid var(--brass);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.5);
+}
+.profile-id h2 { font-size: 30px; line-height: 1.05; }
+.stat-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.stat-tile {
+  display: grid;
+  align-content: start;
+  padding: 8px 12px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  min-width: 0;
+}
+.stat-tile dt { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
+.stat-tile dd { margin: 0; font-family: var(--font-hud); font-weight: 500; font-size: 30px; line-height: 1.1; white-space: nowrap; }
+.stat-tile dd.neg, .stat-sub.neg { color: var(--danger); }
+.stat-sub { font-family: var(--font-data); font-size: 11px; color: var(--muted); }
+.stat-sub.pos { color: var(--ok); }
 .profile-body { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
 .profile-close { position: absolute; top: -20px; right: -20px; }
+@media (max-width: 1000px) {
+  .profile-head { grid-template-columns: auto minmax(0, 1fr); }
+  .stat-tiles { grid-column: 1 / -1; }
+}
 
 .outlook { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .outlook-col h3 {
@@ -826,11 +871,16 @@ h1, h2, h3 {
   .ribbon-sub { display: none; }
   .profile-overlay { padding: 18px 26px; }
   .profile { height: calc(100dvh - 36px); }
-  .profile { grid-template-columns: minmax(0, 0.55fr) minmax(0, 1.45fr); }
-  .profile-caption { padding: 40px 12px 10px; }
-  .profile-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .profile-stats dd { font-size: 15px; }
+  .profile-head { grid-template-columns: auto auto minmax(0, 1fr); padding: 8px 14px; gap: 8px 14px; }
+  .stat-tiles { grid-column: auto; gap: 4px; }
+  .profile-face { width: 56px; height: 56px; }
+  .profile-id h2 { font-size: 20px; }
+  .stat-tile { padding: 3px 8px; }
+  .stat-tile dt { font-size: 9px; }
+  .stat-tile dd { font-size: 18px; }
+  .stat-sub { display: none; }
   .profile-close { top: -14px; right: -18px; }
+  .profile .tab { padding-block: 6px; }
   .drawer-head { padding-block: 4px; }
 }
 
@@ -847,7 +897,15 @@ h1, h2, h3 {
   .rail-name { display: none; }
   .profile-overlay { padding: 26px 10px 10px; }
   .profile { height: calc(100dvh - 36px); }
-  .profile { grid-template-columns: 1fr; grid-template-rows: 200px minmax(0, 1fr); }
+  .profile-head { padding: 12px; gap: 10px; }
+  .profile-face { width: 64px; height: 64px; }
+  .profile-id h2 { font-size: 22px; }
+  .stat-tiles { gap: 4px; }
+  .stat-tile { padding: 4px 6px; }
+  .stat-tile dt { font-size: 9px; letter-spacing: 0.04em; }
+  .stat-tile dd { font-size: 17px; }
+  .stat-sub { display: none; }
+  .job-options { grid-template-columns: 1fr; }
   .profile-close { top: -18px; right: -6px; }
   .outlook { grid-template-columns: 1fr; }
 }
@@ -920,11 +978,11 @@ h1, h2, h3 {
 .racket .desc { font-size: 12px; color: var(--muted); margin: 0; }
 .racket .desc.warn { color: var(--danger); }
 .racket .actions { margin-top: 2px; }
-.level-pips { display: flex; gap: 3px; }
-.level-pips i { flex: 1; height: 5px; border-radius: 1px; background: var(--line); }
-.level-pips i.open { background: var(--land-hi); }        /* livello raggiungibile con la rete attuale */
-.level-pips i.idle { background: var(--danger); opacity: 0.6; } /* acquisito ma fermo */
-.level-pips i.on { background: var(--brass); }
+/* Slot del ramo in città: colorati per organizzazione, i liberi tratteggiati, i tuoi bordati. */
+.slot-bar { display: flex; gap: 3px; height: 9px; }
+.slot-bar i { flex: 1; border-radius: 1px; }
+.slot-bar i.free { border: 1px dashed var(--land-hi); }
+.slot-bar i.mine { box-shadow: inset 0 0 0 1.5px var(--fg); }
 .perks { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; font-size: 12px; color: var(--muted); }
 .perks li { display: grid; grid-template-columns: 44px 1fr; gap: 6px; opacity: 0.7; }
 .perks li.on { color: var(--fg); opacity: 1; }
@@ -1034,76 +1092,328 @@ table.rivals tr.out { opacity: 0.45; }
   * { transition: none !important; animation: none !important; }
 }
 
-/* ---------- Gerarchia ---------- */
-.medallion {
-  width: 38px; height: 38px; flex: none;
-  border-radius: 50%;
-  display: inline-grid; place-items: center;
-  background: var(--ink);
-  border: 2px solid var(--line);
-  font-family: var(--font-display);
-  font-size: 15px;
-  color: var(--fg);
-  overflow: hidden;
-}
-.medallion img { width: 100%; height: 100%; object-fit: cover; }
-.medallion.big { width: 52px; height: 52px; font-size: 18px; }
-.medallion.boss { border-color: var(--brass); color: var(--brass); }
-.medallion.ok { border-color: var(--ok); }
-.medallion.warn { border-color: var(--brass); }
-.medallion.danger { border-color: var(--danger); }
-
-.org-tree { display: grid; gap: 8px; }
-.org-children { list-style: none; margin: 0; padding: 0 0 0 22px; display: grid; gap: 8px; position: relative; }
-/* Linea verticale che scende dal capo; ogni nodo si aggancia con un tratto orizzontale. */
-.org-children::before { content: ''; position: absolute; left: 8px; top: -8px; bottom: 28px; border-left: 1px solid var(--line); }
-.org-children .node { position: relative; }
-.org-children .node::before { content: ''; position: absolute; left: -14px; top: 28px; width: 14px; border-top: 1px solid var(--line); }
-
-.person {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--raised);
-  padding: 10px 12px;
+/* ---------- Banda: organigramma a quadrati ---------- */
+.org { --card: 136px; --link: 22px; }
+.org-chart { display: grid; justify-items: center; }
+.org-card {
+  position: relative;
+  width: var(--card);
+  aspect-ratio: 1;
   display: grid;
-  gap: 6px;
-  font-size: 13px;
-}
-.person.boss { border-color: var(--brass); }
-.person.warn { border-color: var(--brass); }
-.person.danger { border-color: var(--danger); }
-.person.slot { color: var(--muted); border-style: dashed; background: none; }
-.person.slot.locked { opacity: 0.6; }
-.person.direct { background: none; }
-.person-head { display: flex; align-items: center; gap: 10px; }
-.person .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; min-width: 78px; }
-.person .hint { margin: 0; }
-.person .hint.warn, .hint.warn { color: var(--danger); }
-.stat-line { display: flex; align-items: center; gap: 8px; }
-.stat-line .num { min-width: 24px; text-align: right; }
-.stat-line .empty { font-size: 12px; }
-.bar { flex: 1; height: 5px; border-radius: 1px; background: var(--line); overflow: hidden; max-width: 120px; }
-.bar i { display: block; height: 100%; background: var(--muted); }
-.bar.ok i { background: var(--ok); }
-.bar.warn i { background: var(--brass); }
-.bar.danger i { background: var(--danger); }
-.skills { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
-.skills .num { color: var(--fg); }
-.assign { display: flex; align-items: center; gap: 8px; }
-.assign select {
-  flex: 1;
-  background: var(--ink);
+  place-content: center;
+  justify-items: center;
+  gap: 4px;
+  padding: 8px;
+  text-align: center;
   color: var(--fg);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 4px 6px;
-  font: inherit;
+  background: var(--raised);
+  border: 2px solid var(--line);
+  border-radius: 8px;
 }
-.squad { display: flex; align-items: center; gap: 6px; }
-.squad .btn { width: 26px; height: 26px; padding: 0; }
-.squad .num { margin-left: auto; }
-.soldiers { display: inline-flex; gap: 3px; }
-.soldiers i { width: 9px; height: 9px; border-radius: 50%; border: 1px solid var(--muted); }
-.soldiers i.on { background: var(--fg); border-color: var(--fg); }
-.candidates { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+button.org-card:hover:not(:disabled) { border-color: var(--brass); }
+.org-card[aria-pressed='true'] { border-color: var(--brass); box-shadow: 0 0 0 3px rgb(193 154 91 / 0.3); }
+.org-card:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Il capo in cima, con la linea che scende verso i vice. */
+.org-boss { position: relative; padding-bottom: var(--link); }
+.org-boss::after { content: ''; position: absolute; left: 50%; bottom: 0; height: var(--link); border-left: 2px solid var(--line); }
+.org-card.boss { width: calc(var(--card) + 16px); padding: 0; overflow: hidden; border-color: var(--brass); }
+.org-card.boss img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 50% 22%; }
+.org-role {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 18px 6px 6px;
+  background: linear-gradient(transparent, rgb(10 8 6 / 0.9));
+  font-family: var(--font-hud);
+  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #f3e4bf;
+}
+/* I vice in fila: una linea orizzontale li collega, ognuno con il suo tratto verticale. */
+.org-row {
+  position: relative;
+  display: flex;
+  gap: 14px;
+  width: max-content;
+  max-width: 100%;
+  padding-top: var(--link);
+  overflow-x: auto;
+}
+.org-row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: calc(var(--card) / 2);
+  right: calc(var(--card) / 2);
+  border-top: 2px solid var(--line);
+}
+.org-slot { position: relative; flex: none; }
+.org-slot::before { content: ''; position: absolute; left: 50%; top: calc(-1 * var(--link)); height: var(--link); border-left: 2px solid var(--line); }
+.org-row.candidates { padding-top: 0; }
+.org-row.candidates::before, .org-row.candidates .org-slot::before { display: none; }
+.org-name { font-size: 13px; font-weight: 600; line-height: 1.2; }
+.org-loyalty { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.org-loyalty strong { display: block; font-family: var(--font-hud); font-weight: 500; font-size: 28px; line-height: 1; letter-spacing: 0; }
+.org-card.ok .org-loyalty strong { color: var(--ok); }
+.org-card.warn .org-loyalty strong { color: var(--brass); }
+.org-card.danger { border-color: var(--danger); }
+.org-card.danger .org-loyalty strong { color: var(--danger); }
+.org-job { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; line-height: 1.2; }
+.org-card.vice .org-job { border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--fg); background: var(--ink); }
+.org-card.empty-slot { border-style: dashed; border-color: var(--brass); background: none; }
+.org-card.locked { border-style: dashed; background: none; opacity: 0.55; }
+.org-plus { font-family: var(--font-hud); font-size: 34px; line-height: 1; color: var(--brass); }
+.org-lock { width: 26px; height: 26px; fill: none; stroke: var(--muted); stroke-width: 2; }
+.face {
+  width: 52px;
+  height: 52px;
+  flex: none;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+  background: var(--ink);
+  border: 3px solid var(--line);
+  font-family: var(--font-display);
+  font-size: 19px;
+  color: var(--fg);
+}
+.face img { width: 100%; height: 100%; object-fit: cover; }
+.face.ok { border-color: var(--ok); }
+.face.warn { border-color: var(--brass); }
+.face.danger { border-color: var(--danger); }
+.face.big { width: calc(56px * var(--s, 1) + 8px); height: calc(56px * var(--s, 1) + 8px); }
+/* Menu dell'incarico (si apre toccando un vice). */
+.job-menu {
+  width: min(640px, 100%);
+  margin-top: 16px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background: var(--ink);
+  border: 1px solid var(--brass);
+  border-radius: 8px;
+}
+.job-menu-head { display: flex; align-items: center; gap: 12px; }
+.job-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.job-option {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  padding: 10px;
+  text-align: left;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.job-option strong { font-family: var(--font-hud); font-weight: 500; font-size: 18px; }
+.job-option span { font-size: 12px; color: var(--muted); }
+.job-option[aria-pressed='true'] { border-color: var(--brass); }
+.job-option:hover:not(:disabled) { border-color: var(--brass); }
+.job-option:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn.danger { border-color: var(--danger); color: var(--danger); }
+/* Soldati: sotto la linea tratteggiata, un quadratino ciascuno. */
+.org-divider { width: 100%; margin: 26px 0 12px; border-top: 2px dashed var(--line); text-align: center; }
+.org-divider span {
+  position: relative;
+  top: -0.8em;
+  padding: 0 12px;
+  background: var(--panel);
+  font-family: var(--font-hud);
+  font-size: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.org-soldiers { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 5px; max-width: 560px; }
+.org-soldiers i { width: 18px; height: 18px; border-radius: 3px; background: #8d8f94; box-shadow: inset 0 -3px 0 rgb(0 0 0 / 0.25); }
+.org-actions { justify-content: center; margin-top: 14px; }
+.org .hint { text-align: center; max-width: 60ch; }
+
+/* Vice allo spaccio sulla mappa */
+.map-marker { pointer-events: none; }
+.map-marker circle { fill: #1b1b1d; stroke-width: 2.4; vector-effect: non-scaling-stroke; }
+.map-marker text { fill: #fff; font-family: var(--font-display); text-anchor: middle; dominant-baseline: central; }
+.map-marker.dim { opacity: 0.45; }
+.banner-hint { margin: 0; font-size: calc(13px * var(--s) + 1px); color: #333; }
+
+/* Organigramma su telefono (dopo le regole base, perché le sovrascriva) */
+@media (max-height: 520px) and (orientation: landscape) {
+  .org { --card: 96px; --link: 12px; padding-top: 10px; }
+  .org-card.boss { width: var(--card); }
+  .org-role { font-size: 12px; padding-top: 12px; }
+  .org-card .face { width: 36px; height: 36px; font-size: 14px; border-width: 2px; }
+  .org-name { font-size: 11px; }
+  .org-loyalty { font-size: 9px; }
+  .org-loyalty strong { font-size: 20px; }
+  .org-card.vice .org-job { font-size: 9px; padding: 1px 6px; }
+}
+@media (max-width: 640px) and (orientation: portrait) {
+  .org { --card: 100px; --link: 14px; }
+  .org-card.boss { width: var(--card); }
+  .org-card .face { width: 38px; height: 38px; font-size: 15px; }
+  .org-name { font-size: 11px; }
+  .org-loyalty strong { font-size: 22px; }
+  .org-card.vice .org-job { font-size: 9px; }
+}
+
+/* ---------- Guerra ---------- */
+.zone-battle {
+  fill: none;
+  stroke: #e0402f;
+  stroke-width: 2.6;
+  stroke-dasharray: 7 5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+  animation: battle-dash 1.2s linear infinite;
+}
+@keyframes battle-dash { to { stroke-dashoffset: -24; } }
+.map-battle { pointer-events: none; }
+.map-battle-bg { fill: rgb(18 18 20 / 0.88); stroke: #e0402f; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.map-battle-num { font-family: var(--font-hud); font-weight: 600; text-anchor: middle; dominant-baseline: central; }
+.map-battle-swords { fill: none; stroke: #f0e6d6; stroke-width: 2.4; stroke-linecap: round; }
+.swords { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+.tile-war {
+  width: calc(62px * var(--s) + 4px);
+  height: calc(62px * var(--s) + 4px);
+  display: grid;
+  place-items: center;
+  padding: calc(12px * var(--s) + 2px);
+  border-radius: 50%;
+  background: #8f2219;
+  color: #fff;
+  border: 3px solid rgb(255 255 255 / 0.85);
+  box-shadow: 0 0 0 1px #bbb;
+}
+.banner-action { gap: 6px; }
+.banner-btn.war { border-color: #b3362b; color: #8f2219; }
+.banner-btn.war span { color: #9c5a52; }
+.banner-btn.war[aria-pressed='true'], .banner-btn.war:hover:not(:disabled) { background: #fbe9e6; border-color: #8f2219; }
+.banner-details.static { cursor: default; }
+.front { display: flex; align-items: center; gap: 8px; }
+.front-side {
+  min-width: calc(30px * var(--s) + 8px);
+  padding: 2px 6px;
+  text-align: center;
+  border-radius: 4px;
+  color: #fff;
+  font-family: var(--font-hud);
+  font-size: calc(16px * var(--s) + 2px);
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+}
+.front-bar { position: relative; flex: 1; display: flex; height: calc(20px * var(--s) + 4px); border: 1px solid #ccc; }
+.front-bar span { display: block; height: 100%; transition: width 400ms; }
+.front-bar i { position: absolute; top: -5px; bottom: -5px; border-left: 3px solid #111; transform: translateX(-1px); transition: left 400ms; }
+.war-plan { display: grid; gap: 10px; }
+.troops { display: flex; align-items: center; gap: 12px; }
+.troops input { flex: 1; accent-color: #b3362b; }
+.troops strong { font-family: var(--font-hud); font-size: 20px; }
+.forces { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 10px; align-items: stretch; }
+.force { display: grid; gap: 4px; align-content: start; padding: 10px; border: 1px solid var(--line); border-top: 4px solid var(--c); border-radius: 6px; background: var(--raised); }
+.force-name { font-weight: 600; font-size: 13px; }
+.force-soldiers strong { font-family: var(--font-hud); font-size: 26px; font-weight: 500; }
+.force ul { list-style: none; margin: 0; padding: 0; font-size: 12px; color: var(--ok); }
+.force li.neg { color: var(--danger); }
+.force-power { font-family: var(--font-data); font-size: 12px; color: var(--muted); }
+.odds { display: grid; justify-items: center; align-content: center; gap: 4px; text-align: center; min-width: 96px; }
+.odds .swords { width: 30px; height: 30px; }
+.odds strong { font-family: var(--font-hud); font-weight: 500; font-size: 18px; }
+.odds span { font-size: 11px; color: var(--muted); }
+.odds.good { color: var(--ok); }
+.odds.even { color: var(--brass); }
+.odds.bad { color: var(--danger); }
+.org-soldiers i.war { background: #c0584a; }
+/* Spaccio: fasce della polizia → rischio di galera */
+.jail-scale { display: flex; gap: 3px; }
+.jail-scale span {
+  flex: 1;
+  display: grid;
+  justify-items: center;
+  padding: 2px 0;
+  border-radius: 3px;
+  background: #ececeb;
+  color: #555;
+  font-size: calc(10px * var(--s, 1) + 2px);
+  line-height: 1.1;
+}
+.jail-scale span strong { font-family: var(--font-hud); font-weight: 500; font-size: calc(14px * var(--s, 1) + 2px); }
+.jail-scale span.on { background: #b3362b; color: #fff; }
+.racket .jail-scale span { background: var(--ink); color: var(--muted); }
+.racket .jail-scale span.on { background: #b3362b; color: #fff; }
+@media (max-width: 640px) {
+  .forces { grid-template-columns: 1fr; }
+}
+/* Scelta delle truppe su telefono in orizzontale: compatta, il bottone resta visibile. */
+@media (max-height: 520px) and (orientation: landscape) {
+  .war-plan { gap: 6px; padding: 6px 8px; }
+  .troops { font-size: 12px; }
+  .troops strong { font-size: 15px; }
+  .force { padding: 5px 8px; gap: 1px; }
+  .force-name { font-size: 11px; }
+  .force-soldiers strong { font-size: 18px; }
+  .force ul, .force-power { font-size: 10px; }
+  .odds { min-width: 70px; }
+  .odds .swords { width: 20px; height: 20px; }
+  .odds strong { font-size: 14px; }
+  .war-plan > .hint { display: none; }
+}
+
+/* ---------- Tracciato della polizia ---------- */
+.police {
+  display: grid;
+  gap: 4px;
+  width: calc(190px * var(--s) + 30px);
+  padding: calc(6px * var(--s) + 2px) 10px;
+  text-align: left;
+  color: #ececec;
+  background: rgb(28 28 31 / 0.88);
+  border: 2px solid #d2d2d2;
+  border-radius: 8px;
+  box-shadow: 0 0 0 5px rgb(255 255 255 / 0.12);
+  font-family: var(--font-hud);
+}
+.police:hover { border-color: var(--brass); }
+.police.hot { border-color: #c0584a; box-shadow: 0 0 0 5px rgb(192 88 74 / 0.25); }
+.police-head { display: flex; justify-content: space-between; align-items: baseline; font-size: calc(12px * var(--s) + 4px); text-transform: uppercase; letter-spacing: 0.08em; }
+.police-head strong { display: inline-block; font-size: calc(18px * var(--s) + 6px); font-weight: 600; letter-spacing: 0; line-height: 1; }
+.police-head strong.jump { animation: police-jump 1s ease-out; }
+@keyframes police-jump {
+  0% { color: #ff5a44; transform: scale(1.6); }
+  100% { color: inherit; transform: scale(1); }
+}
+.police-bar { position: relative; display: flex; height: calc(6px * var(--s) + 4px); }
+.police-bar i { display: block; height: 100%; }
+.police-bar i.b0 { background: #6b6d72; border-radius: 2px 0 0 2px; }
+.police-bar i.b1 { background: #a8863a; }
+.police-bar i.b2 { background: #c06f30; }
+.police-bar i.b3 { background: #c4512c; }
+.police-bar i.b4 { background: #b3362b; }
+.police-bar i.b5 { background: #7d140c; border-radius: 0 2px 2px 0; }
+.police-bar b {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 3px;
+  background: #fff;
+  box-shadow: 0 0 0 1px #000;
+  transform: translateX(-1.5px);
+  transition: left 600ms ease-out;
+}
+.police-sub { font-family: var(--font-body); font-size: calc(10px * var(--s) + 2px); color: #bdbdbd; }
+@media (max-height: 520px) and (orientation: landscape) {
+  .top-left { gap: 8px; }
+  .police { width: 140px; padding: 4px 8px; box-shadow: none; }
+  .police-sub { display: none; }
+}
+@media (max-width: 640px) and (orientation: portrait) {
+  .game { --map-top: 150px; }
+  .top-left { gap: 8px; }
+  .police { width: 150px; box-shadow: none; }
+  .police-sub { display: none; }
+  .ribbon-wrap, .banner-wrap { top: 78px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .police-head strong.jump, .zone-battle { animation: none; }
+}

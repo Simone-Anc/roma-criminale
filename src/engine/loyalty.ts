@@ -3,12 +3,14 @@
 import { ZONES, ZONE_LIST } from '../data/zones';
 import { BALANCE } from './balance';
 import { mid, news } from './news';
-import { fitSquads, fullName, generateLieutenant, wantedSoldiers } from './organization';
+import { fullName, generateLieutenant } from './organization';
+import { freeSlots } from './rackets';
 import type { Rng } from './rng';
 import { updateOwner } from './territory';
 import { LOCALS, type Family, type FamilyId, type GameState, type Lieutenant, type TerritoryId } from './types';
 
-const SPLIT_COLORS = ['#8a6fb0', '#5f9a8a', '#a8864a', '#b06f8f', '#6f8f5f'];
+// Colori delle scissioni: diversi da quelli delle organizzazioni iniziali.
+const SPLIT_COLORS = ['#c96f6f', '#6fa8a0', '#a07ac9', '#c9b46f', '#7a9ac9', '#a8a8a8'];
 
 /**
  * Variazione settimanale della lealtà. `lostZones` sono i quartieri persi dal
@@ -16,12 +18,12 @@ const SPLIT_COLORS = ['#8a6fb0', '#5f9a8a', '#a8864a', '#b06f8f', '#6f8f5f'];
  */
 function loyaltyDelta(state: GameState, f: Family, l: Lieutenant, lostZones: TerritoryId[], rng: Rng): number {
   let d = -l.ambition / BALANCE.ambitionDrag; // chi è ambizioso vuole sempre di più
-  const missing = wantedSoldiers(l) - l.soldiers;
-  d += missing > 0 ? -0.6 * missing : 0.4; // e vuole uomini da comandare
-  if (!l.assignment) d -= 0.5; // senza incarico si sente messo da parte
+  d += l.assignment ? 0.4 : -0.5; // con un incarico si sente importante, senza messo da parte
   if (f.money < 0) d -= 2; // non viene pagato
   if (f.heat > 70) d -= 0.5; // troppa esposizione: ha paura
-  if (l.assignment && lostZones.some((z) => ZONES[z].area === l.assignment!.area)) d -= 3;
+  // Ha perso il quartiere dove lavorava.
+  const job = l.assignment;
+  if (job?.type === 'spaccio' && lostZones.includes(job.territoryId)) d -= 3;
   return d + (rng.next() - 0.5) * 2;
 }
 
@@ -52,18 +54,18 @@ export function shakeLoyalty(f: Family, amount: number): void {
 }
 
 /**
- * Scissione: il vice se ne va con i suoi soldati, una parte della cassa e gran parte
- * dell'influenza nei quartieri della sua area (mai la base del capo), e diventa
+ * Scissione: il vice se ne va con qualche soldato, una parte della cassa e gran parte
+ * dell'influenza nel quartiere dove lavorava (mai la base del capo), e diventa
  * un'organizzazione rivale.
  */
 export function splitOff(state: GameState, l: Lieutenant, rng: Rng): FamilyId {
   const player = state.families[state.playerId];
   const id = `scissione${state.nextId++}`;
-  const area = l.assignment?.area;
-  const zones = area
-    ? ZONE_LIST.filter((z) => z.area === area && z.id !== player.home && state.territories[z.id].owner === player.id)
-      .map((z) => z.id)
-    : [];
+  const job = l.assignment;
+  const workplace = job?.type === 'spaccio' ? job.territoryId : null;
+  const area = workplace ? ZONES[workplace].area : undefined;
+  const zones = workplace && workplace !== player.home && state.territories[workplace].owner === player.id ? [workplace] : [];
+  const soldiers = Math.min(BALANCE.splitSoldiers, Math.max(0, player.members - 1));
   // Senza quartieri da portarsi via, riparte dai suoi contatti in un quartiere libero vicino.
   const home = zones[0] ?? pickFreeZone(state, area, rng);
   const cash = Math.max(0, Math.round(player.money * BALANCE.splitCashShare));
@@ -86,28 +88,29 @@ export function splitOff(state: GameState, l: Lieutenant, rng: Rng): FamilyId {
     aggression: 0.7,
     trait: `Nati dalla scissione di ${l.nickname}, ex vice capo di ${mid(player)}. Conoscono i tuoi metodi.`,
     startMoney: cash,
-    startMembers: l.soldiers + 1,
+    startMembers: soldiers + 1,
     startInfluence: 0,
     money: cash,
-    members: l.soldiers + 1,
+    members: soldiers + 1,
     reputation: 15,
-    rackets: { [ZONES[home].rackets[0]]: 1 },
+    // Si porta via un posto negli affari, se il mercato ne ha ancora uno libero.
+    rackets: freeSlots(state, ZONES[home].rackets[0]) > 0 ? { [ZONES[home].rackets[0]]: 1 } : {},
     heat: 20,
     lieutenants: [],
     relations,
     isPlayer: false,
     alive: true,
     brokeWeeks: 0,
+    lowProfileUses: 0,
   };
   state.familyOrder.push(id);
 
   player.money -= cash;
-  player.members -= l.soldiers;
+  player.members -= soldiers;
   player.lieutenants = player.lieutenants.filter((x) => x.id !== l.id);
-  fitSquads(player);
 
   news(state, 'organizzazione', `Scissione: ${fullName(l)}, ${l.nickname}, si mette in proprio`, id,
-    `Se ne va con ${l.soldiers} soldati e ${Math.round(cash)}k €${zones.length ? `, e si prende ${zones.map((z) => ZONES[z].name).join(', ')}` : ''}.`);
+    `Se ne va con ${soldiers} soldati e ${Math.round(cash)}k €${zones.length ? `, e si prende ${zones.map((z) => ZONES[z].name).join(', ')}` : ''}.`);
 
   if (zones.length === 0) {
     const inf = state.territories[home].influence;

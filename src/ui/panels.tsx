@@ -4,14 +4,15 @@ import {
   BALANCE,
   LOCALS,
   actionCost,
-  areaChief,
   di,
   fullName,
   control,
   controlLevel,
   expandGain,
   ownedTerritories,
-  racketNetwork,
+  racketSlots,
+  spaccioAt,
+  zoneDistance,
   power,
   relationLabel,
   tribute,
@@ -61,7 +62,7 @@ export function ZonePanel({ game, zoneId, act, onSelectZone }: {
   if (!zoneId)
     return (
       <div className="panel">
-        <p className="empty">Seleziona un quartiere sulla mappa. Il bordo tratteggiato indica dove puoi estendere la tua influenza.</p>
+        <p className="empty">Seleziona un quartiere sulla mappa. L'influenza si aumenta solo nei quartieri neutrali (meno cara in quelli confinanti, tratteggiati); quelli controllati da altri si prendono con un assalto.</p>
       </div>
     );
 
@@ -70,7 +71,8 @@ export function ZonePanel({ game, zoneId, act, onSelectZone }: {
   const owner = t.owner ? game.families[t.owner] : null;
   const me = game.families[game.playerId];
   const mine = t.owner === me.id;
-  const chief = areaChief(game, me.id, zoneId);
+  const dealer = spaccioAt(me, zoneId);
+  const distance = zoneDistance(game, me.id, zoneId);
   const myCtrl = control(game, zoneId, me.id);
   const influence = Object.entries(t.influence).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
   const colorOf = (id: string) => (id === LOCALS ? 'var(--land-hi)' : game.families[id].color);
@@ -98,9 +100,9 @@ export function ZonePanel({ game, zoneId, act, onSelectZone }: {
             'Nessuna organizzazione domina il quartiere'
           )}
         </span>
-        {chief && (
+        {dealer && (
           <span className="empty">
-            Responsabile dell'area: {fullName(chief)}, {chief.nickname} · {chief.soldiers} soldati
+            Allo spaccio: {fullName(dealer)}, {dealer.nickname}{mine ? '' : ' (fermo: il quartiere non è più tuo)'}
           </span>
         )}
       </div>
@@ -136,7 +138,7 @@ export function ZonePanel({ game, zoneId, act, onSelectZone }: {
         <div className="actions">
           {mine ? (
             <ActionButton game={game} action={consolidate} label={`Rafforza quartiere +${BALANCE.consolidateGain}`} act={act} primary />
-          ) : (
+          ) : owner ? null : (
             <ActionButton game={game} action={expand} label={`Aumenta influenza +${expandGain(game, me.id)}`} act={act} primary />
           )}
         </div>
@@ -144,17 +146,17 @@ export function ZonePanel({ game, zoneId, act, onSelectZone }: {
           {mine
             ? `Il quartiere è tuo: rafforzarlo costa poco, non attira attenzione e rende più difficile portartelo via.`
             : owner
-              ? `Entri nel quartiere: prima togli influenza ai gruppi locali, poi intacchi la presa ${di(owner)}. Chi difende è avvantaggiato (rende la metà) e se la lega al dito. +${BALANCE.expandHeat} rischio.`
-              : `Entri nel quartiere togliendo influenza ai gruppi locali. Lo domini dal ${BALANCE.ownershipThreshold}%. +${BALANCE.expandHeat} rischio.`}
+              ? `Il quartiere è controllato ${di(owner)}: l'influenza non basta, si prende solo con un assalto (dal cartiglio in alto).`
+              : `Quartiere neutrale: entri togliendo influenza ai gruppi locali (e, a metà resa, alle organizzazioni che non lo dominano). Lo domini dal ${BALANCE.ownershipThreshold}%. +${BALANCE.expandHeat} rischio.`}
+          {!mine && !owner && distance > 1 && ` Lontano dai tuoi quartieri (${distance} di distanza): costa il ${Math.round(BALANCE.expandDistanceCost * (distance - 1) * 100)}% in più.`}
         </p>
-        {reason && <p className="hint warn">{reason}</p>}
+        {reason && !(owner && !mine) && <p className="hint warn">{reason}</p>}
       </section>
 
       <section>
         <h3>Area {AREAS[zone.area]}</h3>
         <p className="hint">
           {areaZones.length} quartieri · ne domini {areaMine}
-          {chief ? ` · responsabile ${fullName(chief)}` : ' · nessun tuo vice capo è responsabile dell’area'}
         </p>
         <div className="rows">
           {areaZones.map((z) => {
@@ -173,17 +175,17 @@ export function ZonePanel({ game, zoneId, act, onSelectZone }: {
       </section>
 
       <section>
-        <h3>Affari possibili qui</h3>
+        <h3>Affari legati al quartiere</h3>
         <p className="hint">
           {mine
-            ? `Il quartiere sostiene questi rami d'affari: allarga la loro rete. Tributo del quartiere ${money(tribute(game, me.id, zoneId))}/sett.`
-            : 'Se domini il quartiere, questi rami d’affari possono crescere grazie a lui.'}
+            ? `Dominandolo puoi strappare ai rivali slot di questi rami quando il mercato è pieno. Tributo del quartiere ${money(tribute(game, me.id, zoneId))}/sett.`
+            : 'Se lo domini, potrai strappare ai rivali slot di questi rami quando il mercato è pieno.'}
         </p>
         <div className="chips">
           {zone.rackets.map((rid) => (
             <span key={rid} className={`chip${me.specialization === rid ? ' spec' : ''}`}>
               {RACKETS[rid].name}
-              {mine && <span className="empty"> · rete {racketNetwork(game, me.id, rid).length}</span>}
+              <span className="empty"> · tuoi {racketSlots(game, me.id, rid)}/{RACKETS[rid].slots}</span>
             </span>
           ))}
         </div>

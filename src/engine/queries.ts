@@ -2,7 +2,7 @@
 import { RACKET_LIST } from '../data/rackets';
 import { ZONES as TERRITORIES, ZONE_LIST as TERRITORY_LIST } from '../data/zones';
 import { BALANCE, CONTROL_LEVELS } from './balance';
-import { areaTributeBonus, organizationHeat, skimmed } from './organization';
+import { freeSoldiers, organizationHeat, skimmed } from './organization';
 import { bonuses, racketHeat, racketIncome } from './rackets';
 import type { FamilyId, GameState, TerritoryId, TerritoryState } from './types';
 
@@ -14,16 +14,42 @@ export function control(state: GameState, territoryId: TerritoryId, familyId: Fa
   return state.territories[territoryId].influence[familyId] ?? 0;
 }
 
-/** Un territorio è raggiungibile se confina con uno controllato o se vi si ha già influenza. */
+/** Quartiere "vicino": confina con uno dominato o vi si ha già influenza. Lì l'influenza costa il prezzo pieno. */
 export function canReach(state: GameState, familyId: FamilyId, territoryId: TerritoryId): boolean {
-  if (control(state, territoryId, familyId) > 0) return true;
-  return TERRITORIES[territoryId].neighbors.some((n) => state.territories[n].owner === familyId);
+  return zoneDistance(state, familyId, territoryId) <= 1;
+}
+
+/**
+ * Distanza (in quartieri attraversati) dal più vicino dei quartieri dominati:
+ * 0 = già tuo o vi hai già influenza, 1 = confinante, e così via.
+ */
+export function zoneDistance(state: GameState, familyId: FamilyId, territoryId: TerritoryId): number {
+  if (control(state, territoryId, familyId) > 0) return 0;
+  const sources = Object.values(state.territories).filter((t) => t.owner === familyId).map((t) => t.id);
+  if (sources.length === 0) return 1;
+  const seen = new Set(sources);
+  let frontier = sources;
+  for (let d = 1; frontier.length > 0; d++) {
+    const next: TerritoryId[] = [];
+    for (const id of frontier)
+      for (const n of TERRITORIES[id].neighbors) {
+        if (n === territoryId) return d;
+        if (!seen.has(n)) {
+          seen.add(n);
+          next.push(n);
+        }
+      }
+    frontier = next;
+  }
+  return 1;
 }
 
 export function expandCost(state: GameState, familyId: FamilyId, territoryId: TerritoryId): number {
   const def = TERRITORIES[territoryId];
   const base = BALANCE.expandBaseCost + def.wealth * BALANCE.expandWealthCost + def.lawPresence;
-  return Math.round(base * (1 - bonuses(state, familyId).expandDiscount / 100));
+  // Si può puntare ovunque, ma lontano dai propri quartieri costa di più.
+  const far = 1 + BALANCE.expandDistanceCost * Math.max(0, zoneDistance(state, familyId, territoryId) - 1);
+  return Math.round(base * far * (1 - bonuses(state, familyId).expandDiscount / 100));
 }
 
 export function expandGain(state: GameState, familyId: FamilyId): number {
@@ -36,22 +62,20 @@ export function recruitCost(state: GameState, familyId: FamilyId): number {
   return Math.round(BALANCE.recruitCost * (1 - discount / 100));
 }
 
-export function actionsPerTurn(state: GameState, familyId: FamilyId): number {
-  return BALANCE.actionsPerTurn + bonuses(state, familyId).actions;
-}
-
 export function tribute(state: GameState, familyId: FamilyId, territoryId: TerritoryId): number {
   const def = TERRITORIES[territoryId];
-  const extra = 1 + bonuses(state, familyId).tribute / 100 + areaTributeBonus(state, familyId, territoryId);
+  const extra = 1 + bonuses(state, familyId).tribute / 100;
   return (def.wealth * control(state, territoryId, familyId) * BALANCE.tributeFactor * extra) / 100;
 }
 
 export interface Forecast {
-  /** Entrate totali: tributi + rami d'affari. */
+  /** Entrate totali: tributi + rami d'affari + spaccio di strada. */
   income: number;
   tributes: number;
   rackets: number;
-  /** Stipendi: soldati e vice capi. */
+  /** Spaccio di strada: i soldati non impegnati negli assalti. */
+  street: number;
+  /** Stipendi: solo i vice capi (i soldati non sono pagati). */
   upkeep: number;
   /** Trattenuto dai vice poco leali. */
   skimmed: number;
@@ -70,10 +94,11 @@ export function forecast(state: GameState, familyId: FamilyId): Forecast {
     rackets += racketIncome(state, familyId, r.id, all);
     heat += racketHeat(state, familyId, r.id);
   }
-  const income = tributes + rackets;
-  const upkeep = family.members * BALANCE.memberUpkeep + family.lieutenants.length * BALANCE.lieutenantUpkeep;
+  const street = freeSoldiers(state, familyId) * BALANCE.streetIncome;
+  const income = tributes + rackets + street;
+  const upkeep = family.lieutenants.length * BALANCE.lieutenantUpkeep;
   const lost = skimmed(family);
-  return { income, tributes, rackets, upkeep, skimmed: lost, net: income - upkeep - lost, heat };
+  return { income, tributes, rackets, street, upkeep, skimmed: lost, net: income - upkeep - lost, heat };
 }
 
 /** Influenza complessiva: media del controllo su tutte le zone (0-100). */
@@ -98,9 +123,17 @@ export function zoneRisk(state: GameState, territoryId: TerritoryId): number {
 export function policeAttention(state: GameState, familyId: FamilyId): number {
   const family = state.families[familyId];
   const owned = ownedTerritories(state, familyId);
-  if (owned.length === 0) return Math.round(family.heat / 2);
+  // Ogni assalto in corso fa schizzare l'attenzione: la guerra si vede.
+  const attacks = state.battles.filter((b) => b.attacker === familyId).length * BALANCE.attentionPerAttack;
+  if (owned.length === 0) return Math.min(100, Math.round(family.heat / 2 + attacks));
   const avgLaw = owned.reduce((s, t) => s + TERRITORIES[t.id].lawPresence, 0) / owned.length;
-  return Math.min(100, Math.round(family.heat * (avgLaw / 8) + owned.length));
+  return Math.min(100, Math.round(family.heat * (avgLaw / 8) + owned.length + attacks));
+}
+
+/** Rischio settimanale di galera per i soldati in strada, in base all'attenzione della polizia. */
+export function jailRisk(state: GameState, familyId: FamilyId): { chance: number; soldiers: number } {
+  const attention = policeAttention(state, familyId);
+  return BALANCE.jailRisk.find((r) => attention >= r.min) ?? { chance: 0, soldiers: 0 };
 }
 
 /** Potenza sintetica, usata per confronti e classifica. */

@@ -1,23 +1,16 @@
 // Azioni disponibili alle famiglie. Le stesse regole valgono per giocatore e IA.
 import { RACKETS } from '../data/rackets';
-import { AREAS } from '../data/zones';
+import { ZONES } from '../data/zones';
 import { shakeLoyalty } from './loyalty';
-import { chiefOfArea, directSoldiers, fullName, lieutenantSlots, squadCapacity } from './organization';
+import { freeSoldiers, fullName, lieutenantSlots, spaccioAt } from './organization';
 import { BALANCE } from './balance';
-import { mid, news } from './news';
-import { canReach, control, expandCost, expandGain, recruitCost } from './queries';
-import { effectiveLevel, membersBusy, racketCap, racketLevel, upgradeCost } from './rackets';
+import { di, mid, news } from './news';
+import { control, expandCost, expandGain, recruitCost } from './queries';
+import { canSteal, freeSlots, racketSlots, slotCost } from './rackets';
+import { battleAt, endBattle, startBattle } from './war';
 import { Rng } from './rng';
 import { shiftInfluence, updateOwner } from './territory';
 import { LOCALS, type ActionResult, type FamilyId, type GameAction, type GameState } from './types';
-
-/** Azioni gratuite: riorganizzare non consuma la settimana. */
-const FREE_ACTIONS: GameAction['type'][] = ['downgradeRacket', 'assignLieutenant', 'moveSoldiers'];
-
-/** Le azioni che consumano un'azione della settimana. */
-export function costsAction(action: GameAction): boolean {
-  return !FREE_ACTIONS.includes(action.type);
-}
 
 export function actionCost(state: GameState, familyId: FamilyId, action: GameAction): number {
   switch (action.type) {
@@ -28,19 +21,22 @@ export function actionCost(state: GameState, familyId: FamilyId, action: GameAct
     case 'recruit':
       return recruitCost(state, familyId);
     case 'lowProfile':
-      return BALANCE.lowProfileCost;
+      return BALANCE.lowProfileCost * 2 ** state.families[familyId].lowProfileUses;
     case 'respect':
       return BALANCE.respectCost;
-    case 'upgradeRacket':
-      return upgradeCost(state, familyId, action.racketId);
+    case 'takeSlot':
+      return slotCost(state, familyId, action.racketId, !!action.from);
     case 'hireLieutenant':
       return BALANCE.hireCost;
     case 'rewardLieutenant':
       return BALANCE.rewardCost;
-    case 'downgradeRacket':
+    case 'attack':
+    case 'reinforce':
+      return action.soldiers * BALANCE.attackCostPerSoldier;
+    case 'retreat':
+    case 'releaseSlot':
     case 'dismissLieutenant':
     case 'assignLieutenant':
-    case 'moveSoldiers':
       return 0;
   }
 }
@@ -49,18 +45,13 @@ export function validateAction(state: GameState, familyId: FamilyId, action: Gam
   const f = state.families[familyId];
   const cost = actionCost(state, familyId, action);
   if (state.status !== 'playing') return { ok: false, reason: 'La partita è conclusa.' };
-  if (f.isPlayer && costsAction(action) && state.actionsLeft <= 0)
-    return { ok: false, reason: 'Nessuna azione rimasta questa settimana.' };
 
   switch (action.type) {
     case 'expand': {
       const t = state.territories[action.territoryId];
-      // Nei propri quartieri si usa "Rafforza": un'azione sola per ogni situazione.
+      // Nei propri quartieri si usa "Rafforza"; quelli di altri si prendono solo con un assalto.
       if (t.owner === familyId) return { ok: false, reason: 'Il quartiere è già tuo: rafforzalo.' };
-      if (t.owner && t.owner !== familyId && state.week <= BALANCE.truceWeeks)
-        return { ok: false, reason: `Tregua iniziale: nessun attacco fino alla settimana ${BALANCE.truceWeeks + 1}.` };
-      if (!canReach(state, familyId, action.territoryId))
-        return { ok: false, reason: 'Quartiere non confinante con i tuoi.' };
+      if (t.owner) return { ok: false, reason: 'Il quartiere è già controllato: si prende solo con un assalto.' };
       if (f.money < cost) return { ok: false, reason: 'Denaro insufficiente.' };
       return { ok: true };
     }
@@ -71,25 +62,52 @@ export function validateAction(state: GameState, familyId: FamilyId, action: Gam
       if (f.money < cost) return { ok: false, reason: 'Denaro insufficiente.' };
       return { ok: true };
     }
-    case 'upgradeRacket': {
+    case 'takeSlot': {
       const def = RACKETS[action.racketId];
-      const level = racketLevel(state, familyId, action.racketId);
-      if (level >= def.maxLevel) return { ok: false, reason: 'Livello massimo raggiunto.' };
-      if (level >= racketCap(state, familyId, action.racketId))
-        return {
-          ok: false,
-          reason: level === 0
-            ? 'Serve un quartiere adatto a questo ramo.'
-            : 'Rete troppo piccola: domina un altro quartiere adatto per crescere ancora.',
-        };
-      if (membersBusy(state, familyId) >= f.members)
-        return { ok: false, reason: 'Tutti i membri sono già impegnati: recluta.' };
+      if (!action.from) {
+        if (freeSlots(state, action.racketId) <= 0)
+          return { ok: false, reason: `Nessuno slot libero in ${def.name.toLowerCase()}: va strappato a un rivale.` };
+      } else {
+        const victim = state.families[action.from];
+        if (!victim?.alive || action.from === familyId) return { ok: false, reason: 'Organizzazione non valida.' };
+        if (freeSlots(state, action.racketId) > 0) return { ok: false, reason: 'Ci sono ancora slot liberi: prendi quelli.' };
+        if (racketSlots(state, action.from, action.racketId) <= 0)
+          return { ok: false, reason: `${victim.name} non ha slot in questo ramo.` };
+        if (state.week <= BALANCE.truceWeeks)
+          return { ok: false, reason: `Tregua iniziale: nessun attacco fino alla settimana ${BALANCE.truceWeeks + 1}.` };
+        if (!canSteal(state, familyId, action.racketId))
+          return { ok: false, reason: 'Per strappare uno slot devi dominare un quartiere adatto a questo ramo.' };
+      }
       if (f.money < cost) return { ok: false, reason: 'Denaro insufficiente.' };
       return { ok: true };
     }
-    case 'downgradeRacket':
-      if (racketLevel(state, familyId, action.racketId) <= 0) return { ok: false, reason: 'Ramo non avviato.' };
+    case 'releaseSlot':
+      if (racketSlots(state, familyId, action.racketId) <= 0) return { ok: false, reason: 'Nessuno slot in questo ramo.' };
       return { ok: true };
+    case 'attack': {
+      const t = state.territories[action.territoryId];
+      if (!t.owner || t.owner === familyId) return { ok: false, reason: 'Si attaccano solo i quartieri dominati da un’altra organizzazione.' };
+      if (state.week <= BALANCE.truceWeeks)
+        return { ok: false, reason: `Tregua iniziale: nessun attacco fino alla settimana ${BALANCE.truceWeeks + 1}.` };
+      if (battleAt(state, action.territoryId)) return { ok: false, reason: 'Nel quartiere si combatte già.' };
+      if (action.soldiers < 1) return { ok: false, reason: 'Manda almeno un soldato.' };
+      if (action.soldiers > freeSoldiers(state, familyId)) return { ok: false, reason: 'Non hai abbastanza soldati liberi.' };
+      if (f.money < cost) return { ok: false, reason: 'Denaro insufficiente.' };
+      return { ok: true };
+    }
+    case 'reinforce': {
+      const b = state.battles.find((x) => x.id === action.battleId);
+      if (!b || (b.attacker !== familyId && b.defender !== familyId)) return { ok: false, reason: 'Non sei coinvolto in questo scontro.' };
+      if (action.soldiers < 1) return { ok: false, reason: 'Manda almeno un soldato.' };
+      if (action.soldiers > freeSoldiers(state, familyId)) return { ok: false, reason: 'Non hai abbastanza soldati liberi.' };
+      if (f.money < cost) return { ok: false, reason: 'Denaro insufficiente.' };
+      return { ok: true };
+    }
+    case 'retreat': {
+      const b = state.battles.find((x) => x.id === action.battleId);
+      if (!b || b.attacker !== familyId) return { ok: false, reason: 'Solo chi attacca può ritirarsi.' };
+      return { ok: true };
+    }
     case 'hireLieutenant':
       if (!state.candidates.some((c) => c.id === action.candidateId)) return { ok: false, reason: 'Candidato non più disponibile.' };
       if (f.lieutenants.length >= lieutenantSlots(f))
@@ -98,24 +116,20 @@ export function validateAction(state: GameState, familyId: FamilyId, action: Gam
       return { ok: true };
     case 'dismissLieutenant':
     case 'rewardLieutenant':
-    case 'assignLieutenant':
-    case 'moveSoldiers': {
+    case 'assignLieutenant': {
       const l = f.lieutenants.find((x) => x.id === action.lieutenantId);
       if (!l) return { ok: false, reason: 'Vice capo non trovato.' };
       if (action.type === 'rewardLieutenant') {
         if (l.loyalty >= 100) return { ok: false, reason: 'Lealtà già massima.' };
         if (f.money < cost) return { ok: false, reason: 'Denaro insufficiente.' };
       }
-      if (action.type === 'assignLieutenant' && action.assignment) {
-        const chief = chiefOfArea(f, action.assignment.area);
-        if (chief && chief.id !== l.id)
-          return { ok: false, reason: `${AREAS[action.assignment.area]} è già affidata a ${fullName(chief)}.` };
-      }
-      if (action.type === 'moveSoldiers') {
-        if (action.delta > 0 && directSoldiers(f) < action.delta) return { ok: false, reason: 'Nessun soldato libero ai tuoi ordini.' };
-        if (action.delta > 0 && l.soldiers + action.delta > squadCapacity(l))
-          return { ok: false, reason: `Può comandare al massimo ${squadCapacity(l)} soldati.` };
-        if (action.delta < 0 && l.soldiers + action.delta < 0) return { ok: false, reason: 'Non ha soldati da cedere.' };
+      const job = action.type === 'assignLieutenant' ? action.assignment : null;
+      if (job?.type === 'spaccio') {
+        if (state.territories[job.territoryId].owner !== familyId)
+          return { ok: false, reason: 'Lo spaccio si organizza solo in un quartiere che domini.' };
+        const other = spaccioAt(f, job.territoryId);
+        if (other && other.id !== l.id)
+          return { ok: false, reason: `A ${ZONES[job.territoryId].name} c'è già ${fullName(other)}.` };
       }
       return { ok: true };
     }
@@ -169,17 +183,40 @@ export function applyAction(
       shiftInfluence(state, action.territoryId, familyId, BALANCE.consolidateGain);
       updateOwner(state, action.territoryId, rng);
       break;
-    case 'upgradeRacket': {
+    case 'takeSlot': {
       const id = action.racketId;
-      f.rackets[id] = racketLevel(state, familyId, id) + 1;
-      const perk = RACKETS[id].perks.find((p) => p.level === f.rackets[id]);
-      if (f.isPlayer && perk && effectiveLevel(state, familyId, id) >= perk.level)
-        news(state, 'organizzazione', `Nuovo vantaggio: ${perk.name}`, familyId, perk.description);
+      if (action.from) {
+        const victim = state.families[action.from];
+        victim.rackets[id] = racketSlots(state, action.from, id) - 1;
+        changeRelation(state, familyId, action.from, -BALANCE.stealRelation);
+        if (f.isPlayer || victim.isPlayer)
+          news(state, 'economia', `${RACKETS[id].name}: ${f.name} ${f.plural ? 'strappano' : 'strappa'} affari ${di(victim)}`, familyId,
+            'Uno slot del mercato cambia padrone. Chi lo ha perso non dimenticherà.');
+      }
+      f.rackets[id] = racketSlots(state, familyId, id) + 1;
+      const perk = RACKETS[id].perks.find((p) => p.slots === f.rackets[id]);
+      if (f.isPlayer && perk) news(state, 'organizzazione', `Nuovo vantaggio: ${perk.name}`, familyId, perk.description);
       break;
     }
-    case 'downgradeRacket':
-      // Ridurre un ramo libera un membro ma non restituisce l'investimento.
-      f.rackets[action.racketId] = racketLevel(state, familyId, action.racketId) - 1;
+    case 'attack': {
+      const defender = state.territories[action.territoryId].owner!;
+      startBattle(state, familyId, action.territoryId, action.soldiers);
+      f.heat = Math.min(100, f.heat + BALANCE.attackHeat);
+      changeRelation(state, familyId, defender, -BALANCE.attackRelation);
+      break;
+    }
+    case 'reinforce': {
+      const b = state.battles.find((x) => x.id === action.battleId)!;
+      if (b.attacker === familyId) b.attackers += action.soldiers;
+      else b.defenders += action.soldiers;
+      break;
+    }
+    case 'retreat':
+      endBattle(state, state.battles.find((x) => x.id === action.battleId)!, 'defender', rng);
+      break;
+    case 'releaseSlot':
+      // Lasciare uno slot lo rimette sul mercato ma non restituisce l'investimento.
+      f.rackets[action.racketId] = racketSlots(state, familyId, action.racketId) - 1;
       break;
     case 'recruit':
       f.members += BALANCE.recruitAmount;
@@ -191,7 +228,7 @@ export function applyAction(
       break;
     }
     case 'dismissLieutenant':
-      // I soldati tornano agli ordini del capo; gli altri vice ne prendono nota.
+      // Gli altri vice ne prendono nota.
       f.lieutenants = f.lieutenants.filter((x) => x.id !== action.lieutenantId);
       shakeLoyalty(f, BALANCE.dismissLoyaltyHit);
       break;
@@ -203,11 +240,9 @@ export function applyAction(
     case 'assignLieutenant':
       f.lieutenants.find((x) => x.id === action.lieutenantId)!.assignment = action.assignment;
       break;
-    case 'moveSoldiers':
-      f.lieutenants.find((x) => x.id === action.lieutenantId)!.soldiers += action.delta;
-      break;
     case 'lowProfile':
       f.heat = Math.max(0, f.heat - BALANCE.lowProfileHeat);
+      f.lowProfileUses += 1;
       break;
     case 'respect': {
       changeRelation(state, familyId, action.targetId, BALANCE.respectGain);
@@ -220,10 +255,7 @@ export function applyAction(
   }
 
   f.money -= cost;
-  if (f.isPlayer) {
-    state.pendingSetup += cost;
-    if (costsAction(action)) state.actionsLeft -= 1;
-  }
+  if (f.isPlayer) state.pendingSetup += cost;
   return { ok: true };
 }
 

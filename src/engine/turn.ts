@@ -5,9 +5,11 @@ import { ZONES_TO_WIN, ZONE_LIST } from '../data/zones';
 import { runAi } from './ai';
 import { BALANCE } from './balance';
 import { mid, news, v } from './news';
-import { actionsPerTurn, control, forecast, ownedTerritories, power, totalInfluence } from './queries';
+import { control, forecast, jailRisk, ownedTerritories, power, totalInfluence } from './queries';
 import { organizationStep, shakeLoyalty } from './loyalty';
-import { areaPresidio, fitSquads } from './organization';
+import { freeSoldiers, spaccioGain } from './organization';
+import { battleStep } from './war';
+import { ZONES } from '../data/zones';
 import { bonuses } from './rackets';
 import { Rng } from './rng';
 import { shiftInfluence, updateOwner } from './territory';
@@ -27,8 +29,13 @@ export function endTurn(prev: GameState): GameState {
   const { income, upkeep } = economyStep(state);
   // 2. Le organizzazioni IA agiscono
   aiStep(state, rng);
-  // 3. I vantaggi dei rami radicano l'influenza nei quartieri
+  // 2a. L'IA cresce da sola col tempo (regola solo sua)
+  aiGrowthStep(state, rng);
+  // 2b. Guerra: una settimana di scontri per ogni assalto in corso
+  battleStep(state, rng);
+  // 3. I vantaggi dei rami e gli incarichi dei vice radicano l'influenza; nuove reclute
   territoryStep(state, rng);
+  lieutenantStep(state, rng);
   // 4. Eventi (versione 0.5) — 5. Pressione delle forze dell'ordine (prima bozza)
   for (const f of alive(state)) pressureStep(state, f, rng);
   // 6. Statistiche, relazioni, organizzazioni eliminate
@@ -57,7 +64,7 @@ export function endTurn(prev: GameState): GameState {
   // 8. Fine turno
   checkEnd(state);
   state.week += 1;
-  state.actionsLeft = actionsPerTurn(state, state.playerId);
+  for (const f of Object.values(state.families)) f.lowProfileUses = 0;
   state.pendingSetup = 0;
   state.lastReport = report;
   state.rngState = rng.state;
@@ -91,12 +98,48 @@ function territoryStep(state: GameState, rng: Rng): void {
   const gains = Object.fromEntries(alive(state).map((f) => [f.id, bonuses(state, f.id).influencePerWeek]));
   for (const z of ZONE_LIST) {
     const t = state.territories[z.id];
-    const gain = t.owner ? gains[t.owner] + areaPresidio(state, t.owner, z.id) : 0;
+    const gain = t.owner ? gains[t.owner] : 0;
     if (gain > 0) {
       shiftInfluence(state, z.id, t.owner!, gain);
       updateOwner(state, z.id, rng);
     }
   }
+}
+
+/**
+ * Regola solo per l'IA: ogni settimana riceve denaro e, sempre più spesso, nuovi soldati.
+ * Il giocatore no: deve guadagnarseli. Più la partita va avanti, più i rivali sono forti.
+ */
+function aiGrowthStep(state: GameState, rng: Rng): void {
+  const w = state.week;
+  const money = BALANCE.aiMoneyBase + BALANCE.aiMoneyPerWeek * w;
+  const soldierChance = Math.min(0.95, BALANCE.aiSoldierChanceBase + BALANCE.aiSoldierChancePerWeek * w);
+  for (const f of alive(state)) {
+    if (f.isPlayer) continue;
+    f.money += money;
+    if (rng.chance(soldierChance)) f.members += 1;
+  }
+}
+
+/** Incarichi dei vice capi con effetto settimanale: reclutamento e spaccio. */
+function lieutenantStep(state: GameState, rng: Rng): void {
+  for (const f of alive(state))
+    for (const l of f.lieutenants) {
+      const job = l.assignment;
+      if (job?.type === 'reclutare') f.members += BALANCE.recruitPerWeek;
+      // Lo spaccio lavora solo finché il quartiere è tuo; i confinanti crescono meno.
+      if (job?.type === 'spaccio' && state.territories[job.territoryId].owner === f.id) {
+        shiftInfluence(state, job.territoryId, f.id, spaccioGain(l));
+        updateOwner(state, job.territoryId, rng);
+        for (const n of ZONES[job.territoryId].neighbors) {
+          // L'influenza cresce solo nei quartieri neutrali (o già tuoi): gli altri si prendono con un assalto.
+          const owner = state.territories[n].owner;
+          if (owner && owner !== f.id) continue;
+          shiftInfluence(state, n, f.id, BALANCE.spaccioNeighborGain);
+          updateOwner(state, n, rng);
+        }
+      }
+    }
 }
 
 function pressureStep(state: GameState, f: Family, rng: Rng): void {
@@ -107,13 +150,16 @@ function pressureStep(state: GameState, f: Family, rng: Rng): void {
     news(state, 'polizia', `Sequestro di beni: nel mirino ${mid(f)}`, f.id,
       f.isPlayer ? `Bloccati circa ${seized}k €. Ridurre il rischio abbassa la probabilità di nuovi sequestri.` : undefined);
   }
-  if (f.heat >= 85 && rng.chance(0.25 * shield)) {
-    f.members = Math.max(1, f.members - 2);
-    f.reputation = Math.max(0, f.reputation - 5);
-    fitSquads(f);
-    shakeLoyalty(f, BALANCE.arrestLoyaltyHit);
-    news(state, 'polizia', `${f.name}, operazione all'alba: scattano gli arresti`, f.id,
-      f.isPlayer ? 'Due membri dell’organizzazione sono stati fermati.' : undefined);
+  // Spaccio di strada: più la polizia è attenta, più è facile che qualcuno finisca in galera.
+  const risk = jailRisk(state, f.id);
+  const street = freeSoldiers(state, f.id);
+  if (street > 0 && risk.chance > 0 && rng.chance(risk.chance * shield)) {
+    const jailed = Math.min(street, risk.soldiers);
+    f.members -= jailed;
+    if (jailed >= 2) shakeLoyalty(f, BALANCE.arrestLoyaltyHit);
+    if (f.isPlayer)
+      news(state, 'polizia', `Retata in strada: ${jailed === 1 ? 'un tuo soldato finisce' : `${jailed} tuoi soldati finiscono`} in galera`, f.id,
+        'Più l’attenzione della polizia è alta, più spesso succede. Basso profilo, riciclaggio e corruzione aiutano.');
   }
 }
 
@@ -122,7 +168,6 @@ function upkeepStep(state: GameState): void {
     if (f.money < 0) {
       f.brokeWeeks += 1;
       f.members = Math.max(1, f.members - 1);
-      fitSquads(f);
       if (f.isPlayer)
         news(state, 'economia', 'Casse vuote: un membro lascia l’organizzazione', f.id,
           `Settimane consecutive in rosso: ${f.brokeWeeks} su ${BALANCE.brokeWeeksToLose}.`);
@@ -135,6 +180,7 @@ function upkeepStep(state: GameState): void {
     }
     if (!f.isPlayer && ownedTerritories(state, f.id).length === 0 && totalInfluence(state, f.id) < 2) {
       f.alive = false;
+      f.rackets = {}; // i suoi slot tornano sul mercato
       news(state, 'organizzazione', `Fine di un'epoca: ${f.name} ${v(f, 'esce', 'escono')} di scena`, f.id);
     }
   }

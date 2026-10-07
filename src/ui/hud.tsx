@@ -1,40 +1,54 @@
 // Comandi sovrapposti alla mappa a schermo intero: nastro del turno, cartigli del
 // quartiere e del ramo d'affari, medaglione del capo, rivali, schermata del profilo.
 // Solo presentazione: le regole restano nel motore.
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import bossPortrait from '../assets/boss.jpg';
 import { RACKETS, RACKET_LIST } from '../data/rackets';
-import { AREAS, ZONES, ZONE_LIST, ZONES_TO_WIN } from '../data/zones';
+import { AREAS, ZONES, ZONES_TO_WIN } from '../data/zones';
 import {
   BALANCE,
   LOCALS,
   actionCost,
-  actionsPerTurn,
   activePerks,
+  attackForce,
+  attackShare,
+  battleAt,
+  battleForces,
+  defenseForce,
+  freeSoldiers,
+  garrison,
+  jailRisk,
+  soldiersAtWar,
+  canSteal,
   control,
-  effectiveLevel,
+  di,
   expandGain,
   forecast,
+  freeSlots,
   fullName,
+  lieutenantSlots,
   ownedTerritories,
   policeAttention,
-  racketCap,
+  power,
   racketIncome,
-  racketLevel,
-  racketNetwork,
-  unledSoldiers,
+  racketMajority,
+  racketSlots,
+  slotHolders,
+  spaccioGain,
   validateAction,
   weekLabel,
+  type Battle,
   type Family,
+  type Force,
   type GameAction,
   type GameState,
   type RacketId,
   type TerritoryId,
 } from '../engine';
 import { money, signedMoney, wealthLabel } from './format';
-import { OrganizationPanel } from './OrganizationPanel';
+import { LieutenantFace, OrganizationPanel } from './OrganizationPanel';
 import type { Act } from './panels';
-import { RacketCard } from './RacketsPanel';
+import { JailScale, RacketCard, SlotBar, StreetIcon } from './RacketsPanel';
 
 export const BOSS_PORTRAIT = bossPortrait;
 
@@ -97,25 +111,64 @@ export function RacketIcon({ id }: { id: RacketId }) {
   );
 }
 
+// ------------------------------------------------------------------ Tracciato della polizia
+
+/** Fasce del tracciato: dove inizia ognuna (in %). Le prime 10 sono tranquille. */
+const POLICE_BANDS = [0, ...[...BALANCE.jailRisk].reverse().map((r) => r.min), 100];
+
+/**
+ * Quanto la polizia sa della tua organizzazione (attenzione 0-100), con le fasce di
+ * rischio galera. Ogni assalto lo fa salire di colpo: un breve lampo lo segnala.
+ */
+export function PoliceTracker({ game, onOpen }: { game: GameState; onOpen: () => void }) {
+  const attention = policeAttention(game, game.playerId);
+  const risk = jailRisk(game, game.playerId);
+  const prev = useRef(attention);
+  const [jump, setJump] = useState(0);
+  useEffect(() => {
+    if (attention > prev.current) setJump((j) => j + 1);
+    prev.current = attention;
+  }, [attention]);
+  return (
+    <button className={`police${attention >= 41 ? ' hot' : ''}`} onClick={onOpen} aria-label={`Polizia: attenzione ${attention}%`}>
+      <span className="police-head">
+        <span>Polizia</span>
+        <strong key={jump} className={jump ? 'jump' : ''}>{attention}%</strong>
+      </span>
+      <span className="police-bar" aria-hidden="true">
+        {POLICE_BANDS.slice(0, -1).map((from, i) => (
+          <i key={from} style={{ width: `${POLICE_BANDS[i + 1] - from}%` }} className={`b${i}`} />
+        ))}
+        <b style={{ left: `${attention}%` }} />
+      </span>
+      <span className="police-sub">
+        {risk.chance > 0 ? `galera ${Math.round(risk.chance * 100)}% · −${risk.soldiers} a settimana` : 'nessun rischio di galera'}
+      </span>
+    </button>
+  );
+}
+
 // ------------------------------------------------------------------ Nastro del turno
 
 export function TurnRibbon({ game, onEndTurn }: { game: GameState; onEndTurn: () => void }) {
-  const total = Math.max(actionsPerTurn(game, game.playerId), game.actionsLeft);
-  const pips = (from: number, to: number) =>
-    Array.from({ length: to - from }, (_, i) => <i key={i} className={`pip${from + i < game.actionsLeft ? ' on' : ''}`} />);
-  const half = Math.ceil(total / 2);
+  // Nessun limite di azioni: si gioca finché ci sono soldi, poi si chiude la settimana.
+  const diamonds = (
+    <span className="pips" aria-hidden="true">
+      <i className="pip on" />
+      <i className="pip on" />
+    </span>
+  );
   return (
     <div className="ribbon-wrap">
       <div className="ribbon">
-        <span className="pips" aria-hidden="true">{pips(0, half)}</span>
+        {diamonds}
         <h1>Settimana {game.week}</h1>
-        <span className="pips" aria-hidden="true">{pips(half, total)}</span>
+        {diamonds}
         <button className="end-turn" onClick={onEndTurn} disabled={game.status !== 'playing'}>
           Fine<br />turno
         </button>
       </div>
       <p className="ribbon-sub">
-        <span className="sr">{game.actionsLeft} azioni rimaste su {total}. </span>
         {game.week <= BALANCE.truceWeeks
           ? `Tregua fino alla settimana ${BALANCE.truceWeeks + 1} · scegli dove muoverti`
           : `${weekLabel(game.week)} · scegli dove muoverti`}
@@ -154,7 +207,7 @@ function BannerButton({ game, action, label, act }: { game: GameState; action: G
   return (
     <button className="banner-btn" disabled={!check.ok} title={check.reason} onClick={() => act(action)}>
       <strong>{label}</strong>
-      <span>{money(actionCost(game, game.playerId, action))} · {game.actionsLeft} {game.actionsLeft === 1 ? 'azione' : 'azioni'}</span>
+      <span>{money(actionCost(game, game.playerId, action))}</span>
     </button>
   );
 }
@@ -164,6 +217,9 @@ function BannerButton({ game, action, label, act }: { game: GameState; action: G
 export function ZoneBanner({ game, zoneId, act, onClose, onDetails }: {
   game: GameState; zoneId: TerritoryId; act: Act; onClose: () => void; onDetails: () => void;
 }) {
+  const [planning, setPlanning] = useState(false);
+  const battle = battleAt(game, zoneId);
+  if (battle) return <BattleBanner key={battle.id} game={game} battle={battle} act={act} onClose={onClose} onDetails={onDetails} />;
   const zone = ZONES[zoneId];
   const t = game.territories[zoneId];
   const me = game.families[game.playerId];
@@ -188,12 +244,23 @@ export function ZoneBanner({ game, zoneId, act, onClose, onDetails }: {
       title={zone.name}
       subtitle={`${AREAS[zone.area]} · ${ownerText}${mine ? '' : ` · tu ${myCtrl}%`}`}
       button={
-        <BannerButton
-          game={game}
-          action={action}
-          act={act}
-          label={mine ? `Rafforza +${BALANCE.consolidateGain}` : `Influenza +${expandGain(game, me.id)}`}
-        />
+        <>
+          {/* I quartieri degli altri si prendono solo con un assalto. */}
+          {(!owner || mine) && (
+            <BannerButton
+              game={game}
+              action={action}
+              act={act}
+              label={mine ? `Rafforza +${BALANCE.consolidateGain}` : `Influenza +${expandGain(game, me.id)}`}
+            />
+          )}
+          {owner && !mine && (
+            <button className="banner-btn war" aria-pressed={planning} onClick={() => setPlanning(!planning)}>
+              <strong>Assalto</strong>
+              <span>scegli gli uomini</span>
+            </button>
+          )}
+        </>
       }
       onClose={onClose}
       strip={
@@ -215,7 +282,252 @@ export function ZoneBanner({ game, zoneId, act, onClose, onDetails }: {
           <span>Dettagli</span>
         </button>
       }
-      note={check.ok ? undefined : check.reason}
+      note={check.ok || (owner && !mine) ? undefined : check.reason}
+    >
+      {planning && owner && !mine && (
+        <TroopPicker game={game} zoneId={zoneId} act={act} onDone={() => setPlanning(false)} />
+      )}
+    </Banner>
+  );
+}
+
+// ------------------------------------------------------------------ Guerra
+
+function SwordsIcon() {
+  return (
+    <svg className="swords" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 4l11 11M20 4L9 15M13 17l4 4M11 17l-4 4M15 13l4 0M9 13l-4 0" />
+    </svg>
+  );
+}
+
+function odds(myShare: number): { label: string; tone: string } {
+  if (myShare >= 0.65) return { label: 'Netto vantaggio', tone: 'good' };
+  if (myShare >= 0.55) return { label: 'Favorevole', tone: 'good' };
+  if (myShare >= 0.45) return { label: 'Equilibrato', tone: 'even' };
+  if (myShare >= 0.35) return { label: 'Sfavorevole', tone: 'bad' };
+  return { label: 'Disperato', tone: 'bad' };
+}
+
+function ForceCard({ title, color, force }: { title: string; color: string; force: Force }) {
+  return (
+    <div className="force" style={{ ['--c' as string]: color }}>
+      <span className="force-name">{title}</span>
+      <span className="force-soldiers"><strong>{force.soldiers}</strong> uomini</span>
+      <ul>
+        {force.mods.map((m) => (
+          <li key={m.label} className={m.pct < 0 ? 'neg' : ''}>{m.pct > 0 ? '+' : '−'}{Math.abs(m.pct)}% {m.label}</li>
+        ))}
+      </ul>
+      <span className="force-power">Forza {Math.round(force.power * 10) / 10}</span>
+    </div>
+  );
+}
+
+/** Scelta degli uomini per un assalto (o per rinforzare uno scontro in corso), con il confronto delle forze. */
+function TroopPicker({ game, zoneId, battle, act, onDone }: {
+  game: GameState; zoneId: TerritoryId; battle?: Battle; act: Act; onDone: () => void;
+}) {
+  const me = game.families[game.playerId];
+  const free = freeSoldiers(game, me.id);
+  const [n, setN] = useState(Math.max(1, Math.ceil(free * (battle ? 0.5 : 0.6))));
+  const sent = Math.min(Math.max(1, n), Math.max(1, free));
+  const defenderId = battle ? battle.defender : game.territories[zoneId].owner!;
+  const attackerId = battle ? battle.attacker : me.id;
+  const iAttack = attackerId === me.id;
+  const attack = battle
+    ? attackForce(game, attackerId, zoneId, battle.attackers + (iAttack ? sent : 0))
+    : attackForce(game, me.id, zoneId, sent);
+  const defense = battle
+    ? defenseForce(game, defenderId, zoneId, battle.defenders + (iAttack ? 0 : sent))
+    : defenseForce(game, defenderId, zoneId, garrison(game, defenderId));
+  const share = attackShare(attack, defense);
+  const o = odds(iAttack ? share : 1 - share);
+  const action: GameAction = battle
+    ? { type: 'reinforce', battleId: battle.id, soldiers: sent }
+    : { type: 'attack', territoryId: zoneId, soldiers: sent };
+  const check = validateAction(game, me.id, action);
+  const a = game.families[attackerId];
+  const d = game.families[defenderId];
+
+  return (
+    <div className="banner-more war-plan">
+      {free === 0 ? (
+        <p className="hint warn">Nessun soldato libero: recluta, o aspetta che finiscano gli scontri in corso.</p>
+      ) : (
+        <>
+          <label className="troops">
+            <span>{battle ? 'Rinforzi' : 'Uomini da mandare'}</span>
+            <input type="range" min={1} max={free} value={sent} onChange={(e) => setN(Number(e.target.value))} />
+            <strong className="num">{sent}/{free}</strong>
+          </label>
+          <div className="forces">
+            <ForceCard title={iAttack ? `${a.name} (tu)` : a.name} color={a.color} force={attack} />
+            <div className={`odds ${o.tone}`}>
+              <SwordsIcon />
+              <strong>{o.label}</strong>
+              <span>{Math.round((iAttack ? share : 1 - share) * 100)}% della forza</span>
+            </div>
+            <ForceCard title={iAttack ? d.name : `${d.name} (tu)`} color={d.color} force={defense} />
+          </div>
+          <p className="hint">
+            {battle
+              ? 'I rinforzi entrano negli scontri della prossima settimana.'
+              : `Chi difende schiera subito il ${Math.round(BALANCE.defenderGarrison * 100)}% dei suoi soldati liberi e può mandare rinforzi.`}
+            {' '}Gli scontri durano più settimane: ogni settimana entrambi perdono uomini e il fronte si sposta verso il più forte.
+            Mentre combattono, i soldati non spacciano. Rischio +{BALANCE.attackHeat}, poi +{BALANCE.battleHeat} a settimana.
+          </p>
+          <div className="actions">
+            <button
+              className="btn btn-primary"
+              disabled={!check.ok}
+              title={check.reason}
+              onClick={() => {
+                act(action);
+                onDone();
+              }}
+            >
+              {battle ? 'Manda i rinforzi' : 'Lancia l’assalto'} <span className="cost">{money(actionCost(game, me.id, action))}</span>
+            </button>
+            <button className="btn btn-small" onClick={onDone}>Annulla</button>
+          </div>
+          {!check.ok && <p className="hint warn">{check.reason}</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Barra del fronte: a destra vince chi attacca, a sinistra chi difende. */
+function FrontBar({ game, battle }: { game: GameState; battle: Battle }) {
+  const a = game.families[battle.attacker];
+  const d = game.families[battle.defender];
+  return (
+    <div className="front" aria-label={`Fronte: ${battle.front} su 100`}>
+      <span className="front-side" style={{ background: d.color }}>{battle.defenders}</span>
+      <div className="front-bar">
+        <span style={{ width: `${100 - battle.front}%`, background: d.color }} />
+        <span style={{ width: `${battle.front}%`, background: a.color }} />
+        <i style={{ left: `${100 - battle.front}%` }} />
+      </div>
+      <span className="front-side" style={{ background: a.color }}>{battle.attackers}</span>
+    </div>
+  );
+}
+
+export function BattleBanner({ game, battle, act, onClose, onDetails }: {
+  game: GameState; battle: Battle; act: Act; onClose: () => void; onDetails: () => void;
+}) {
+  const [planning, setPlanning] = useState(false);
+  const me = game.families[game.playerId];
+  const a = game.families[battle.attacker];
+  const d = game.families[battle.defender];
+  const involved = a.id === me.id || d.id === me.id;
+  const { attack, defense } = battleForces(game, battle);
+  const share = attackShare(attack, defense);
+  const myShare = a.id === me.id ? share : 1 - share;
+  const last = battle.last;
+  return (
+    <Banner
+      tile={<span className="tile-war"><SwordsIcon /></span>}
+      title={`Guerra · ${ZONES[battle.territoryId].name}`}
+      subtitle={`${a.name} attacca ${d.name} · ${battle.rounds === 0 ? 'gli schieramenti si preparano' : `settimana ${battle.rounds} di ${BALANCE.battleMaxRounds}`}`}
+      button={
+        involved ? (
+          <button className="banner-btn war" aria-pressed={planning} onClick={() => setPlanning(!planning)}>
+            <strong>Rinforza</strong>
+            <span>{freeSoldiers(game, me.id)} liberi</span>
+          </button>
+        ) : (
+          <span className="banner-btn done"><strong>Osservi</strong></span>
+        )
+      }
+      onClose={onClose}
+      strip={<FrontBar game={game} battle={battle} />}
+      side={
+        a.id === me.id ? (
+          <button className="banner-details" onClick={() => act({ type: 'retreat', battleId: battle.id })}>
+            <span>Ritirati</span>
+          </button>
+        ) : (
+          <button className="banner-details" onClick={onDetails}>
+            <Crest f={d} size="sm" />
+            <span>Dettagli</span>
+          </button>
+        )
+      }
+      note={
+        last
+          ? `Ultima settimana: ${a.name} −${last.attackerLosses}, ${d.name} −${last.defenderLosses}, fronte ${last.shift >= 0 ? '+' : '−'}${Math.abs(last.shift)}.${involved ? ` Forza attuale: ${odds(myShare).label.toLowerCase()} per te.` : ''}`
+          : involved ? `Forza attuale: ${odds(myShare).label.toLowerCase()} per te (${Math.round(myShare * 100)}%).` : undefined
+      }
+    >
+      {planning && involved && (
+        <TroopPicker game={game} zoneId={battle.territoryId} battle={battle} act={act} onDone={() => setPlanning(false)} />
+      )}
+    </Banner>
+  );
+}
+
+// ------------------------------------------------------------------ Spaccio di strada (Affari)
+
+export function StreetBanner({ game, act, onClose }: { game: GameState; act: Act; onClose: () => void }) {
+  const me = game.families[game.playerId];
+  const free = freeSoldiers(game, me.id);
+  const atWar = soldiersAtWar(game, me.id);
+  const attention = policeAttention(game, me.id);
+  const risk = jailRisk(game, me.id);
+  return (
+    <Banner
+      tile={<span className="tile-icon"><StreetIcon /></span>}
+      title="Spaccio"
+      subtitle={`${free} soldati in strada · ${money(free * BALANCE.streetIncome)}/sett.${atWar ? ` · ${atWar} in guerra` : ''}`}
+      button={<BannerButton game={game} action={{ type: 'recruit' }} act={act} label={`Recluta +${BALANCE.recruitAmount}`} />}
+      onClose={onClose}
+      strip={<JailScale game={game} />}
+      side={<span className="banner-details static"><span>Polizia {attention}%</span></span>}
+      note={
+        risk.chance > 0
+          ? `Rischio galera ogni settimana: ${Math.round(risk.chance * 100)}% di perdere ${risk.soldiers === 1 ? 'un soldato' : `${risk.soldiers} soldati`}.`
+          : 'Sotto il 10% di attenzione della polizia nessuno finisce in galera.'
+      }
+    />
+  );
+}
+
+// ------------------------------------------------------------------ Spaccio: scelta sulla mappa
+
+/** Cartiglio mostrato mentre si sceglie sulla mappa dove mettere un vice allo spaccio. */
+export function PlacementBanner({ game, lieutenantId, zoneId, onConfirm, onCancel }: {
+  game: GameState; lieutenantId: string; zoneId: TerritoryId | null; onConfirm: () => void; onCancel: () => void;
+}) {
+  const l = game.families[game.playerId].lieutenants.find((x) => x.id === lieutenantId);
+  if (!l) return null;
+  const zone = zoneId ? ZONES[zoneId] : null;
+  return (
+    <Banner
+      tile={<LieutenantFace l={l} className="big" />}
+      title={zone ? `Spaccio a ${zone.name}` : 'Scegli il quartiere'}
+      subtitle={`${fullName(l)}, ${l.nickname}`}
+      button={
+        <button className="banner-btn" disabled={!zone} onClick={onConfirm}>
+          <strong>Conferma</strong>
+          <span>gratis</span>
+        </button>
+      }
+      onClose={onCancel}
+      strip={
+        <p className="banner-hint">
+          {zone
+            ? `+${spaccioGain(l)} influenza a settimana qui, +${BALANCE.spaccioNeighborGain} in ognuno dei ${zone.neighbors.length} quartieri confinanti. Rischio +${BALANCE.spaccioHeat}/sett.`
+            : 'Tocca uno dei tuoi quartieri in bianco.'}
+        </p>
+      }
+      side={
+        <button className="banner-details" onClick={onCancel}>
+          <span>Annulla</span>
+        </button>
+      }
     />
   );
 }
@@ -223,16 +535,24 @@ export function ZoneBanner({ game, zoneId, act, onClose, onDetails }: {
 // ------------------------------------------------------------------ Rami d'affari
 
 /** Colonna di icone dei rami (si apre con "Affari"). */
-export function RacketRail({ game, selected, onSelect, onSummary, onClose }: {
-  game: GameState; selected: RacketId | null; onSelect: (id: RacketId) => void; onSummary: () => void; onClose: () => void;
+export function RacketRail({ game, selected, street, onSelect, onStreet, onSummary, onClose }: {
+  game: GameState; selected: RacketId | null; street: boolean;
+  onSelect: (id: RacketId) => void; onStreet: () => void; onSummary: () => void; onClose: () => void;
 }) {
   const me = game.families[game.playerId];
   return (
     <nav className="rail" aria-label="Rami d'affari">
       <ul>
+        <li>
+          <button className="rail-item" aria-pressed={street} onClick={onStreet} title="Spaccio: i soldati in strada">
+            <StreetIcon />
+            <span className="rail-name">Spaccio</span>
+            <span className="rail-level">{freeSoldiers(game, me.id)}</span>
+          </button>
+        </li>
         {RACKET_LIST.map((r) => {
-          const level = racketLevel(game, me.id, r.id);
-          const open = level > 0 || racketCap(game, me.id, r.id) > 0;
+          const level = racketSlots(game, me.id, r.id);
+          const open = level > 0 || freeSlots(game, r.id) > 0 || canSteal(game, me.id, r.id);
           return (
             <li key={r.id}>
               <button
@@ -266,39 +586,35 @@ export function RacketBanner({ game, racketId, act, onClose, onSelectZone }: {
   const [open, setOpen] = useState(false);
   const def = RACKETS[racketId];
   const me = game.families[game.playerId];
-  const level = racketLevel(game, me.id, racketId);
-  const active = effectiveLevel(game, me.id, racketId);
-  const cap = racketCap(game, me.id, racketId);
-  const network = racketNetwork(game, me.id, racketId);
-  const upgrade: GameAction = { type: 'upgradeRacket', racketId };
-  const check = validateAction(game, me.id, upgrade);
-  const suited = ZONE_LIST.filter((z) => z.rackets.includes(racketId)).length;
+  const mine = racketSlots(game, me.id, racketId);
+  const majority = racketMajority(game, racketId);
+  // Slot libero se c'è; altrimenti si punta a chi ne ha di più (gli altri sono nei dettagli).
+  const victim = freeSlots(game, racketId) > 0
+    ? undefined
+    : slotHolders(game, racketId).find((h) => h.familyId !== me.id)?.familyId;
+  const take: GameAction = { type: 'takeSlot', racketId, from: victim };
+  const check = validateAction(game, me.id, take);
+  const majorityText = majority ? (majority === me.id ? 'maggioranza tua' : `maggioranza ${game.families[majority].name}`) : 'nessuna maggioranza';
 
   return (
     <Banner
       tile={<span className="tile-icon"><RacketIcon id={racketId} /></span>}
       title={def.name}
-      subtitle={`Liv. ${level}/${def.maxLevel} · ${money(racketIncome(game, me.id, racketId))}/sett. · rete ${network.length} di ${suited} quartieri adatti`}
+      subtitle={`Tuoi ${mine}/${def.slots} · ${money(racketIncome(game, me.id, racketId))}/sett. · ${majorityText}`}
       button={
-        level < def.maxLevel
-          ? <BannerButton game={game} action={upgrade} act={act} label="Potenzia" />
-          : <span className="banner-btn done"><strong>Al massimo</strong></span>
+        victim || freeSlots(game, racketId) > 0
+          ? <BannerButton game={game} action={take} act={act} label={victim ? `Strappa a ${game.families[victim].name}` : 'Prendi slot'} />
+          : <span className="banner-btn done"><strong>Tutti tuoi</strong></span>
       }
       onClose={onClose}
-      strip={
-        <div className="level-strip" aria-label={`Livello ${active} attivo su ${level}`}>
-          {Array.from({ length: def.maxLevel }, (_, i) => (
-            <i key={i} className={i < active ? 'on' : i < level ? 'idle' : i < cap ? 'open' : ''} />
-          ))}
-        </div>
-      }
+      strip={<SlotBar game={game} racketId={racketId} className="slot-bar big" />}
       side={
         <button className="banner-details" onClick={() => setOpen(!open)} aria-expanded={open}>
           <span className="chev">{open ? '▴' : '▾'}</span>
           <span>Dettagli</span>
         </button>
       }
-      note={level < def.maxLevel && !check.ok ? check.reason : undefined}
+      note={check.ok ? undefined : check.reason}
     >
       {open && (
         <div className="banner-more">
@@ -338,25 +654,37 @@ export function PlayerHud({ game, onProfile }: { game: GameState; onProfile: () 
   );
 }
 
+/** In basso si vedono solo i rivali più potenti; gli altri sono nel pannello "Rivali". */
+const RIVALS_SHOWN = 3;
+
 export function RivalChips({ game, onOpen }: { game: GameState; onOpen: () => void }) {
-  const rivals = game.familyOrder.map((id) => game.families[id]).filter((f) => !f.isPlayer);
+  const rivals = game.familyOrder
+    .map((id) => game.families[id])
+    .filter((f) => !f.isPlayer && f.alive)
+    .sort((a, b) => power(game, b.id) - power(game, a.id));
+  const hidden = rivals.length - RIVALS_SHOWN;
   return (
     <div className="hud-rivals">
-      {rivals.map((f) => (
+      {rivals.slice(0, RIVALS_SHOWN).map((f) => (
         <button
           key={f.id}
-          className={`rival-chip${f.alive ? '' : ' out'}`}
+          className="rival-chip"
           onClick={onOpen}
           style={{ ['--c' as string]: f.color }}
           aria-label={`${f.name}: ${ownedTerritories(game, f.id).length} quartieri`}
         >
           <span className="rival-box">
             <strong>{ownedTerritories(game, f.id).length}</strong>
-            <small>{f.alive ? wealthLabel(f.money) : 'fuori'}</small>
+            <small>{wealthLabel(f.money)}</small>
           </span>
           <Crest f={f} />
         </button>
       ))}
+      {hidden > 0 && (
+        <button className="rival-more" onClick={onOpen} aria-label={`Altre ${hidden} organizzazioni rivali`}>
+          +{hidden}
+        </button>
+      )}
     </div>
   );
 }
@@ -375,23 +703,34 @@ function Outlook({ game }: { game: GameState }) {
   good.push({ value: `+${BALANCE.specializationBonus}%`, text: `Specialità: ${RACKETS[me.specialization].name}` });
   for (const r of RACKET_LIST)
     for (const p of activePerks(game, me.id, r.id)) good.push({ value: r.name.split(' ')[0], text: `${p.name} — ${p.description}` });
-  for (const l of me.lieutenants)
-    if (l.assignment) good.push({ value: AREAS[l.assignment.area], text: `${fullName(l)} è responsabile dell'area` });
+  for (const r of RACKET_LIST)
+    if (racketMajority(game, r.id) === me.id && r.majorityBonus > 0)
+      good.push({ value: `+${money(r.majorityBonus)}`, text: `Maggioranza in ${r.name.toLowerCase()}` });
+  for (const l of me.lieutenants) {
+    const job = l.assignment;
+    if (job?.type === 'reclutare') good.push({ value: `+${BALANCE.recruitPerWeek}`, text: `Soldati a settimana: ${fullName(l)} recluta` });
+    if (job?.type === 'spaccio') good.push({ value: ZONES[job.territoryId].name, text: `${fullName(l)} è allo spaccio` });
+  }
+  for (const b of game.battles)
+    if (b.attacker === me.id) good.push({ value: `${b.attackers} uomini`, text: `Assalto in corso a ${ZONES[b.territoryId].name}` });
   if (game.week <= BALANCE.truceWeeks) good.push({ value: 'Tregua', text: `Nessuno può portarti via quartieri fino alla settimana ${BALANCE.truceWeeks + 1}` });
 
-  const unled = unledSoldiers(me);
-  if (unled > 0) bad.push({ value: `${unled}`, text: `Soldati senza guida: rischio in aumento` });
   for (const l of me.lieutenants)
     if (l.loyalty < BALANCE.loyaltyWarn) bad.push({ value: `${Math.round(l.loyalty)}`, text: `Lealtà bassa: ${fullName(l)}, ${l.nickname}` });
   // Soglie di sequestri (60) e arresti (85): vedi turn.ts.
   if (me.heat >= 85) bad.push({ value: `${Math.round(me.heat)}%`, text: 'Rischio altissimo: arresti possibili' });
   else if (me.heat >= 60) bad.push({ value: `${Math.round(me.heat)}%`, text: 'Rischio alto: sequestri possibili' });
+  for (const b of game.battles)
+    if (b.defender === me.id) bad.push({ value: `${b.defenders} uomini`, text: `Sotto assalto ${di(game.families[b.attacker])} a ${ZONES[b.territoryId].name}` });
+  const risk = jailRisk(game, me.id);
+  if (risk.chance > 0) bad.push({ value: `${Math.round(risk.chance * 100)}%`, text: `Rischio galera in strada ogni settimana (−${risk.soldiers})` });
   if (fc.net < 0) bad.push({ value: money(fc.net), text: 'Il bilancio settimanale è in rosso' });
   if (me.brokeWeeks > 0) bad.push({ value: `${me.brokeWeeks}/4`, text: 'Settimane con la cassa negativa' });
   if (fc.skimmed > 0) bad.push({ value: money(fc.skimmed), text: 'Trattenuti ogni settimana dai vice infedeli' });
-  for (const r of RACKET_LIST) {
-    const idle = racketLevel(game, me.id, r.id) - effectiveLevel(game, me.id, r.id);
-    if (idle > 0) bad.push({ value: `${idle} liv.`, text: `${r.name}: la rete non basta a sostenerli` });
+  for (const l of me.lieutenants) {
+    const job = l.assignment;
+    if (job?.type === 'spaccio' && game.territories[job.territoryId].owner !== me.id)
+      bad.push({ value: ZONES[job.territoryId].name, text: `Quartiere perso: lo spaccio di ${fullName(l)} è fermo` });
   }
 
   const column = (title: string, cls: string, rows: typeof good, empty: string) => (
@@ -421,35 +760,50 @@ function Outlook({ game }: { game: GameState }) {
   );
 }
 
-export function ProfileModal({ game, act, onClose, onSelectZone }: {
-  game: GameState; act: Act; onClose: () => void; onSelectZone: (id: TerritoryId) => void;
+export function ProfileModal({ game, act, onClose, onPlaceSpaccio }: {
+  game: GameState; act: Act; onClose: () => void; onPlaceSpaccio: (lieutenantId: string) => void;
 }) {
   const [tab, setTab] = useState<ProfileTab>('banda');
   const me = game.families[game.playerId];
+  const fc = forecast(game, me.id);
+  const heat = Math.round(me.heat);
   const attention = policeAttention(game, me.id);
+  const tiles: { label: string; value: string; sub?: string; tone?: string }[] = [
+    { label: 'Cassa', value: money(me.money), sub: `${signedMoney(fc.net)}/sett.`, tone: fc.net < 0 ? 'neg' : 'pos' },
+    { label: 'Soldati', value: `${me.members}`, sub: soldiersAtWar(game, me.id) ? `${soldiersAtWar(game, me.id)} in guerra` : `${money(fc.street)}/sett. in strada` },
+    { label: 'Vice capi', value: `${me.lieutenants.length}/${lieutenantSlots(me)}` },
+    { label: 'Quartieri', value: `${ownedTerritories(game, me.id).length}`, sub: `obiettivo ${ZONES_TO_WIN}` },
+    { label: 'Potere', value: `${power(game, me.id)}` },
+    { label: 'Reputazione', value: `${Math.round(me.reputation)}` },
+    { label: 'Rischio', value: `${heat}%`, tone: heat >= 60 ? 'neg' : undefined },
+    { label: 'Attenzione', value: `${attention}%`, tone: attention >= 60 ? 'neg' : undefined },
+  ];
   return (
     <div className="overlay profile-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="profile" role="dialog" aria-modal="true" aria-label={`Profilo: ${me.name}`}>
-        <div className="profile-art">
-          <img src={BOSS_PORTRAIT} alt="Ritratto del capo" />
-          <div className="profile-caption">
+        <header className="profile-head">
+          <img className="profile-face" src={BOSS_PORTRAIT} alt="Ritratto del capo" />
+          <div className="profile-id">
             <span className="eyebrow">Il capo</span>
             <h2>{me.name}</h2>
-            <dl className="profile-stats">
-              <div><dt>Rischio</dt><dd>{Math.round(me.heat)}%</dd></div>
-              <div><dt>Attenzione</dt><dd>{attention}%</dd></div>
-              <div><dt>Soldati</dt><dd>{me.members}</dd></div>
-              <div><dt>Vice capi</dt><dd>{me.lieutenants.length}</dd></div>
-            </dl>
           </div>
-        </div>
+          <dl className="stat-tiles">
+            {tiles.map((t) => (
+              <div key={t.label} className="stat-tile">
+                <dt>{t.label}</dt>
+                <dd className={t.tone ?? ''}>{t.value}</dd>
+                {t.sub && <span className={`stat-sub ${t.tone ?? ''}`}>{t.sub}</span>}
+              </div>
+            ))}
+          </dl>
+        </header>
         <div className="profile-body">
           <div className="tabs" role="tablist">
             <button role="tab" className="tab" aria-selected={tab === 'banda'} onClick={() => setTab('banda')}>La banda</button>
             <button role="tab" className="tab" aria-selected={tab === 'quadro'} onClick={() => setTab('quadro')}>Vantaggi e problemi</button>
           </div>
           {tab === 'banda'
-            ? <OrganizationPanel game={game} act={act} onSelectZone={onSelectZone} />
+            ? <OrganizationPanel game={game} act={act} onPlaceSpaccio={onPlaceSpaccio} />
             : <Outlook game={game} />}
         </div>
         <CloseButton onClick={onClose} className="profile-close" />
